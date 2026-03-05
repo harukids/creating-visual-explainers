@@ -1,0 +1,6 @@
+output/*.html
+!output/index.html
+!output/git.html
+!output/llm.html
+!output/cursor.html
+deploy-history.log
