@@ -77,24 +77,6 @@ Step 3 で収集した情報をもとに、図解HTMLを生成する。検索結
    - `<!-- CONTENT_START -->` 〜 `<!-- CONTENT_END -->` → Step 4で生成したコンテンツ
 5. ファイルを保存する（ブラウザで開くのは Step 6 のデプロイ後に行う。ローカルでは開かない）
 
-### Step 5.5: 図解ライブラリの更新
-
-`output/` 内の全HTMLファイル（`index.html` 以外）をスキャンし、一覧ページ `output/index.html` を生成・更新する。
-
-1. `output/` 内の `.html` ファイル一覧を取得する（`index.html` は除外）
-2. 各ファイルの `<title>` タグからタイトルを、`<meta property="og:description">` から説明文を読み取る
-3. `references/library-template.html` を読み込む
-4. テンプレート内の `<!-- LIBRARY_ITEMS -->` を、以下の形式のカードリストで置換する:
-
-```html
-<a href="{ファイル名}" class="block bg-ads-surface border border-ads-border rounded-xl p-5 hover:border-ads-accent/40 transition-colors">
-  <h2 class="font-bold text-slate-900 mb-1">{タイトル}</h2>
-  <p class="text-sm text-ads-muted">{説明文}</p>
-</a>
-```
-
-5. 結果を `output/index.html` として保存する
-
 ### Step 6: 公開
 
 ファイル保存後、公開する前にまず Node.js の有無を確認する。
@@ -111,7 +93,7 @@ node --version
 
 以下のスクリプトを**実行する**（中身を読む必要はない）。
 
-**重要: 第1引数には図解本体のファイル（`output/{スラッグ}.html`）を指定する。`output/index.html`（ライブラリ一覧）ではない。**
+**重要: 第1引数には図解本体のファイル（`output/{スラッグ}.html`）を指定する。`output/index.html`（サンプル一覧）ではない。**
 
 **macOS / Git Bash（Windows）の場合:**
 
@@ -184,7 +166,6 @@ https://diagram-スラッグ.surge.sh
 
 ファイルの保存先:
 output/{スラッグ}.html（ブラウザにドラッグ＆ドロップすると表示できます）
-図解ライブラリ: output/index.html
 
 図解の主なポイント:
 - （主要トピックを3〜5個）
