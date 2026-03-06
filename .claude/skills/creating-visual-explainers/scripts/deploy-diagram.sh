@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-HTML_FILE="${1:-output/index.html}"
+HTML_FILE="${1:?使い方: deploy-diagram.sh <HTMLファイル> [スラッグ]}"
 SLUG="${2:-}"
 
 GREEN='\033[0;32m'

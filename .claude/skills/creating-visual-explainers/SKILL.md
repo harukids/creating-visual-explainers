@@ -93,8 +93,6 @@ node --version
 
 以下のスクリプトを**実行する**（中身を読む必要はない）。
 
-**重要: 第1引数には図解本体のファイル（`output/{スラッグ}.html`）を指定する。`output/index.html`（サンプル一覧）ではない。**
-
 **macOS / Git Bash（Windows）の場合:**
 
 ```bash
