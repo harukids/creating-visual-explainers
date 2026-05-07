@@ -1,6 +1,7 @@
 /**
  * Vercel Serverless: POST /api/generate
- * Body: { imageBase64, mimeType?, audience?, ngWords?, accessCode? }
+ * Body: { mode?, imageBase64?, mimeType?, audience?, ngWords?, imageSummary?, variationHint?, notifySlack? }
+ * DUMMY_MODE は環境変数のみ（body でのダミー指定は無視）
  * Returns: { ok: true, data } or { error, ... }
  */
 
@@ -11,20 +12,24 @@ function clip(text, max = 220) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
-function buildSlackMessage(result, meta) {
+function buildSlackMessage(result) {
   const posts = Array.isArray(result.post_variants) ? result.post_variants : [];
   const byVariant = Object.fromEntries(posts.map((p) => [p.variant, p]));
   const ts = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
-  const dateLabel = meta.clientDateLabel || ts;
   const empathy = byVariant.empathy || {};
   const learning = byVariant.learning || {};
   const consultation = byVariant.consultation || {};
+  const themeLine = clip(String(result.interpretation?.theme || "-"), 240);
+  const tagsLine = clip(
+    Array.isArray(result.hashtags) ? result.hashtags.join(" ") : "-",
+    400
+  );
 
   const lines = [
-    `*今日の投稿案が生成されました* (${dateLabel})`,
+    `*今日の投稿案が生成されました* (${ts})`,
     "",
     `*テーマ*`,
-    `${result.interpretation?.theme || "-"}`,
+    themeLine,
     "",
     `*評価* 共感:${result.evaluation?.empathy ?? "-"} 保存:${result.evaluation?.save ?? "-"} コメント:${result.evaluation?.comment ?? "-"} 導線:${result.evaluation?.lead ?? "-"} 世界観:${result.evaluation?.brand_fit ?? "-"}`,
     "",
@@ -37,9 +42,9 @@ function buildSlackMessage(result, meta) {
     `*投稿文（相談導線型）*`,
     clip(consultation.caption, 300),
     "",
-    `*ハッシュタグ* ${Array.isArray(result.hashtags) ? result.hashtags.join(" ") : "-"}`,
+    `*ハッシュタグ* ${tagsLine}`,
   ];
-  return lines.join("\n");
+  return clip(lines.join("\n"), 3500);
 }
 
 async function sendSlack(webhookUrl, text) {
@@ -315,13 +320,13 @@ module.exports = async (req, res) => {
     imageSummary = "",
     variationHint = "",
     notifySlack = false,
-    clientDateLabel = "",
   } = body || {};
 
   const dummyEnabledByEnv = ["1", "true", "yes", "on"].includes(
     String(process.env.DUMMY_MODE || "").toLowerCase()
   );
-  const useDummy = dummyEnabledByEnv || body?.useDummy === true;
+  /** クライアントの body.useDummy は無視（本番でダミーにすり替えられないようにする） */
+  const useDummy = dummyEnabledByEnv;
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey && !useDummy) {
@@ -439,7 +444,7 @@ module.exports = async (req, res) => {
       slackStatus.skippedReason = "SLACK_WEBHOOK_URL is not configured";
     } else {
       try {
-        const msg = buildSlackMessage(parsed, { clientDateLabel });
+        const msg = buildSlackMessage(parsed);
         await sendSlack(webhookUrl, msg);
         slackStatus.sent = true;
       } catch (err) {

@@ -181,7 +181,6 @@
         ngWords: document.getElementById("ng").value.trim(),
         variationHint: document.getElementById("variationHint").value.trim(),
         notifySlack: document.getElementById("notifySlack").checked,
-        clientDateLabel: new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
       };
     }
 
@@ -204,6 +203,9 @@
 
     function buildStatusText(json, summarySaved) {
       const lines = [];
+      if (json.meta && json.meta.source === "dummy") {
+        lines.push("ダミーモード（固定サンプル）。本番は DUMMY_MODE をオフにしてください。");
+      }
       if (summarySaved) {
         lines.push("画像要約を保存しました（次回から画像なし再生成が使えます）。");
       }
@@ -217,13 +219,30 @@
       return lines.join("\n");
     }
 
+    async function parseJsonResponse(res) {
+      const text = await res.text();
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      if (ct.includes("application/json")) {
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new Error(`サーバー応答がJSONとして読めません (${res.status})`);
+        }
+      }
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(text.slice(0, 400) || `HTTP ${res.status}`);
+      }
+    }
+
     async function postGenerate(payload) {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: buildHeaders(),
         body: JSON.stringify(payload),
       });
-      const json = await res.json();
+      const json = await parseJsonResponse(res);
       if (!res.ok) {
         const msg = json.error || "エラーが発生しました";
         const detail = json.details ? "\n" + json.details.join("\n") : json.detail || "";
