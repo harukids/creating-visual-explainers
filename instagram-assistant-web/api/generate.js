@@ -1,6 +1,7 @@
 /**
  * Vercel Serverless: POST /api/generate
  * Body: { mode?, imageBase64?, mimeType?, audience?, workContext?, ngWords?, imageSummary?, variationHint?, notifySlack? }
+ * Empty audience/workContext → optional env DEFAULT_AUDIENCE / DEFAULT_WORK_CONTEXT (Vercel).
  * Returns: { ok: true, data } or { error, ... }
  */
 
@@ -483,7 +484,7 @@ module.exports = async (req, res) => {
   const {
     imageBase64,
     mimeType = "image/jpeg",
-    audience = "",
+    audience: audienceRaw = "",
     workContext: workContextRaw = "",
     ngWords = "",
     mode = "analyze",
@@ -492,6 +493,7 @@ module.exports = async (req, res) => {
     notifySlack = false,
   } = body || {};
 
+  const audience = typeof audienceRaw === "string" ? audienceRaw : "";
   const workContext = typeof workContextRaw === "string" ? workContextRaw : "";
 
   const apiKey = process.env.OPENAI_API_KEY;
@@ -515,17 +517,23 @@ module.exports = async (req, res) => {
   const dataUrl = isAnalyze ? `data:${mimeType};base64,${imageBase64}` : "";
 
   const systemPrompt = buildSystemPrompt();
+  const trimmedAudience = audience.trim();
   const trimmedWork = workContext.trim();
-  const wc =
-    trimmedWork ||
-    (typeof process.env.DEFAULT_WORK_CONTEXT === "string"
+  const defaultAudience =
+    typeof process.env.DEFAULT_AUDIENCE === "string"
+      ? process.env.DEFAULT_AUDIENCE.trim()
+      : "";
+  const defaultWork =
+    typeof process.env.DEFAULT_WORK_CONTEXT === "string"
       ? process.env.DEFAULT_WORK_CONTEXT.trim()
-      : "");
+      : "";
+  const audienceEffective = trimmedAudience || defaultAudience;
+  const wc = trimmedWork || defaultWork;
   const userText = [
     isAnalyze
       ? "Analyze this image for Instagram post ideas."
       : "Regenerate Instagram post ideas from the given image_summary only (do not assume new visuals).",
-    audience ? `Target / brand context: ${audience}` : "",
+    audienceEffective ? `Target / brand context: ${audienceEffective}` : "",
     wc
       ? `Business & intent (ALL copy must reflect this — be specific, not generic): ${wc}`
       : "",
@@ -639,6 +647,10 @@ module.exports = async (req, res) => {
       mode,
       image_summary: parsed.image_summary,
       source: "openai",
+      context_defaults: {
+        audience: trimmedAudience ? "form" : defaultAudience ? "env:DEFAULT_AUDIENCE" : "none",
+        workContext: trimmedWork ? "form" : defaultWork ? "env:DEFAULT_WORK_CONTEXT" : "none",
+      },
     },
   });
 };

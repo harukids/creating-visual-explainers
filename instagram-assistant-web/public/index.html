@@ -125,11 +125,11 @@
       <input type="file" id="file" accept="image/*" />
       <img id="preview" class="preview-img hidden" alt="" />
 
-      <label for="audience">発信の文脈（任意）</label>
-      <textarea id="audience" placeholder="例：子育てママ向けコーチ / デザイナーとしての日常 など"></textarea>
+      <label for="audience">発信の文脈（任意・空ならサーバーの既定）</label>
+      <textarea id="audience" placeholder="普段のターゲットは Vercel の DEFAULT_AUDIENCE に書いておくと空欄でOK。その回だけ変えたいときだけここに追記"></textarea>
 
-      <label for="workContext">仕事・サービス・この投稿で達成したいこと（推奨）</label>
-      <textarea id="workContext" placeholder="例：◯◯の個別相談につなげたい / 既存客に「また頼みたい」と思ってもらう / 〇業界の若手向けに実務Tipsを出したい — 誰に・何のために投稿するかを具体的に"></textarea>
+      <label for="workContext">仕事・サービス・この投稿で達成したいこと（任意・空ならサーバーの既定）</label>
+      <textarea id="workContext" placeholder="普段の仕事文脈は DEFAULT_WORK_CONTEXT に。今日だけの要望（トーン・締め・伸ばしたい型など）はここに短く"></textarea>
 
       <label for="ng">避けたい表現・NG（任意）</label>
       <input type="text" id="ng" placeholder="例：煽り・断定的な医療表現 など" />
@@ -206,6 +206,13 @@
 
     function buildStatusText(json, summarySaved) {
       const lines = [];
+      const cd = json.meta && json.meta.context_defaults;
+      if (cd) {
+        const bits = [];
+        if (String(cd.audience || "").startsWith("env")) bits.push("ターゲット＝サーバー既定");
+        if (String(cd.workContext || "").startsWith("env")) bits.push("仕事文脈＝サーバー既定");
+        if (bits.length) lines.push(bits.join("・") + "（DEFAULT_*）。");
+      }
       if (summarySaved) {
         lines.push("画像要約を保存しました（次回から画像なし再生成が使えます）。");
       }
