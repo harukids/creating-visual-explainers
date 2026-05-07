@@ -1,11 +1,11 @@
 /**
  * Vercel Serverless: POST /api/generate
  * Body: { mode?, imageBase64?, mimeType?, audience?, ngWords?, imageSummary?, variationHint?, notifySlack? }
- * DUMMY_MODE は環境変数のみ（body でのダミー指定は無視）
  * Returns: { ok: true, data } or { error, ... }
  */
 
 const VARIANTS = new Set(["empathy", "learning", "consultation"]);
+const VARIANT_ORDER = ["empathy", "learning", "consultation"];
 
 function clip(text, max = 220) {
   if (!text || typeof text !== "string") return "";
@@ -173,6 +173,103 @@ function validateOutput(obj) {
   return errors.length ? { ok: false, errors } : { ok: true };
 }
 
+function resolvePostVariantKey(v) {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (VARIANTS.has(s)) return s;
+  const lower = s.toLowerCase();
+  if (VARIANTS.has(lower)) return lower;
+  const alias = {
+    empathic: "empathy",
+    sympathy: "empathy",
+    emotional: "empathy",
+    learn: "learning",
+    educational: "learning",
+    insight: "learning",
+    consult: "consultation",
+    consulting: "consultation",
+    dm: "consultation",
+    共感: "empathy",
+    学び: "learning",
+    相談: "consultation",
+  };
+  return alias[s] || alias[lower] || null;
+}
+
+/** Ensure exactly 3 items: empathy, learning, consultation with string goal/hook/caption. */
+function normalizePostVariants(obj) {
+  const theme =
+    typeof obj.interpretation?.theme === "string" ? obj.interpretation.theme.trim() : "";
+  const direction =
+    typeof obj.interpretation?.direction === "string" ? obj.interpretation.direction.trim() : "";
+  const baseCaption = theme || direction || "今日のひとことが伝わる投稿";
+
+  const stubs = {
+    empathy: {
+      goal: "読者の気持ちに寄り添う",
+      hook: "まず共感の一言",
+      caption: `${baseCaption}\n\n（共感型：安心感のあるトーンで）`,
+    },
+    learning: {
+      goal: "小さな学び・視点を渡す",
+      hook: "気づきを一言で",
+      caption: `${baseCaption}\n\n（学び型：具体的なコツや視点）`,
+    },
+    consultation: {
+      goal: "自然な相談・DM導線",
+      hook: "続きは個別で、と自然に",
+      caption: `${baseCaption}\n\n（相談導線型：押し付けない一言）`,
+    },
+  };
+
+  function coerceStr(x, fallback) {
+    if (typeof x === "string" && x.trim()) return x;
+    if (x != null && typeof x !== "object") return String(x).trim() || fallback;
+    return fallback;
+  }
+
+  const raw = Array.isArray(obj.post_variants) ? obj.post_variants : [];
+  const byVariant = {};
+
+  for (const p of raw) {
+    if (!p || typeof p !== "object") continue;
+    const key = resolvePostVariantKey(p.variant);
+    if (key) byVariant[key] = { ...p, variant: key };
+  }
+
+  const unmapped = [];
+  for (const p of raw) {
+    if (!p || typeof p !== "object") continue;
+    if (!resolvePostVariantKey(p.variant)) unmapped.push(p);
+  }
+
+  for (let i = 0; i < VARIANT_ORDER.length; i++) {
+    const k = VARIANT_ORDER[i];
+    if (byVariant[k]) continue;
+    const pick = unmapped.shift();
+    if (pick) byVariant[k] = { ...pick, variant: k };
+  }
+
+  if (VARIANT_ORDER.some((k) => !byVariant[k]) && raw.length >= 3) {
+    VARIANT_ORDER.forEach((k, i) => {
+      if (!byVariant[k] && raw[i] && typeof raw[i] === "object") {
+        byVariant[k] = { ...raw[i], variant: k };
+      }
+    });
+  }
+
+  obj.post_variants = VARIANT_ORDER.map((k) => {
+    const p = byVariant[k] || {};
+    const st = stubs[k];
+    return {
+      variant: k,
+      goal: coerceStr(p.goal, st.goal),
+      hook: coerceStr(p.hook, st.hook),
+      caption: coerceStr(p.caption, st.caption),
+    };
+  });
+}
+
 /** Coerce common model slips before validateOutput (scale_max, selection_summary, note, score types). */
 function normalizeInstagramPayload(obj) {
   if (!obj || typeof obj !== "object") return obj;
@@ -217,6 +314,8 @@ function normalizeInstagramPayload(obj) {
     }
   });
 
+  normalizePostVariants(obj);
+
   return obj;
 }
 
@@ -241,7 +340,7 @@ function buildSystemPrompt() {
     "- alternative_media: max 3 items. If only one image exists, use [] or up to 3 placeholder entries with kind photo, url \"placeholder\", label describing a different crop/angle conceptually.",
     "- evaluation: integers 1-5 for empathy, save, comment, lead, brand_fit. MUST set scale_max to the number 5 (not 10). MUST include note as a string (trust-first scoring explanation).",
     "- idea_cards: 3 or 4 items, each { title?: string, text: string }.",
-    "- post_variants: exactly 3 objects with variant empathy, learning, consultation (each once). caption may use \\n for line breaks.",
+    "- post_variants: exactly 3 objects in order. variant MUST be the English strings exactly: \"empathy\", \"learning\", \"consultation\" (one each, no synonyms). Each object MUST have goal, hook, caption as strings (Japanese). caption may use \\n for line breaks.",
     "- hashtags: array of strings, may include #.",
     "- self_check.items: array of { label: string, passed: boolean } for quality checks.",
     "- image_summary: concise Japanese summary (2-4 sentences) of the media context for cheap text-only regeneration.",
@@ -319,102 +418,18 @@ function buildImageSummaryFallback(parsed) {
   return lines.join(" ").slice(0, 500);
 }
 
-function buildDummyOutput({ mode, imageSummary, audience, variationHint }) {
-  const isRegenerate = mode === "regenerate";
-  const summary =
-    (isRegenerate && imageSummary) ||
-    "朝のデスクでコーヒーを置いた静かな日常シーン。整え直す・深呼吸・小さく始める文脈が合う。";
-  const audienceText = audience ? `（対象: ${audience}）` : "";
-  const variationText = variationHint ? ` 再生成ヒント: ${variationHint}` : "";
-
-  return {
-    selected_media: {
-      kind: "photo",
-      url: "user-upload",
-      alt_text: "朝のデスクとコーヒー",
-      selection_summary: `ダミーモードのため固定サンプルを返しています${audienceText}。`,
-    },
-    alternative_media: [
-      { kind: "photo", url: "placeholder", label: "手元アップ" },
-      { kind: "photo", url: "placeholder", label: "机全体の引き" },
-      { kind: "photo", url: "placeholder", label: "光のある窓際" },
-    ],
-    interpretation: {
-      theme: "忙しい朝でも自分のペースを取り戻す",
-      direction: "共感→気づき→やさしい締め",
-      reason: `落ち着いた日常感が信頼導線に向く。${variationText}`.trim(),
-    },
-    evaluation: {
-      empathy: 4,
-      save: 4,
-      comment: 3,
-      lead: 4,
-      brand_fit: 5,
-      scale_max: 5,
-      note: "ダミーモードの仮評価（信頼重視）",
-    },
-    idea_cards: [
-      { text: "完璧より継続。1分で始める行動は保存されやすい。" },
-      { text: "キャプション1行目は共感、2行目で気づきを入れる。" },
-      { text: "相談導線は『一緒に整理』の言い回しが安心される。" },
-    ],
-    post_variants: [
-      {
-        variant: "empathy",
-        goal: "保存",
-        hook: "朝が重い日があっても大丈夫",
-        caption:
-          "今日はうまく始められない朝だった。\n\nそれでも、コーヒーを一口飲んで深呼吸したら少し戻れた。\n\n完璧じゃなくても、始めた自分を認めたい。",
-      },
-      {
-        variant: "learning",
-        goal: "フォロー",
-        hook: "意志力より環境の工夫",
-        caption:
-          "集中が切れる日は、意志ではなく視界の情報量を減らす。\n\n机には『今やる1枚』だけ置く。\n\nこれだけで、迷いが減って進みやすくなる。",
-      },
-      {
-        variant: "consultation",
-        goal: "DM",
-        hook: "忙しいのに進んでいない感覚",
-        caption:
-          "タスクは多いのに進まないとき、優先順位が言葉になっていないことが多いです。\n\nよければDMで、いま一番詰まっていることを1つだけ教えてください。\n一緒に3つまで整理します。",
-      },
-    ],
-    hashtags: ["#仕事と暮らし", "#朝の習慣", "#自分のペース", "#相談歓迎"],
-    stories_idea: "朝の1分ルーティンを質問スタンプ付きで共有。",
-    reel_idea: "0-3秒で共感テロップ、4-12秒で小さな行動、最後にやさしい導線。",
-    self_check: {
-      items: [
-        { label: "売り込みが強すぎない", passed: true },
-        { label: "断定しすぎていない", passed: true },
-        { label: "共感→気づき→やさしい締め", passed: true },
-      ],
-    },
-    image_summary: summary,
-  };
-}
-
 module.exports = async (req, res) => {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
 
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Access-Code");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     return res.status(204).end();
   }
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
-  }
-
-  const expected = process.env.ACCESS_CODE;
-  if (expected) {
-    const sent = req.headers["x-access-code"];
-    if (sent !== expected) {
-      return res.status(401).json({ error: "Invalid or missing access code" });
-    }
   }
 
   let body = req.body;
@@ -437,15 +452,10 @@ module.exports = async (req, res) => {
     notifySlack = false,
   } = body || {};
 
-  const dummyEnvRaw = String(process.env.DUMMY_MODE || "").trim().toLowerCase();
-  const dummyEnabledByEnv = ["1", "true", "yes", "on"].includes(dummyEnvRaw);
-  /** クライアントの body.useDummy は無視（本番でダミーにすり替えられないようにする） */
-  const useDummy = dummyEnabledByEnv;
-
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey && !useDummy) {
+  if (!apiKey) {
     return res.status(500).json({
-      error: "OPENAI_API_KEY is not configured on the server (or enable DUMMY_MODE=true for UI testing)",
+      error: "OPENAI_API_KEY is not configured on the server",
     });
   }
   const isRegenerate = mode === "regenerate";
@@ -477,67 +487,63 @@ module.exports = async (req, res) => {
     .join("\n");
 
   let parsed;
-  if (useDummy) {
-    parsed = buildDummyOutput({ mode, imageSummary, audience, variationHint });
-  } else {
-    let first;
+  let first;
+  try {
+    first = await openAiCompleteJson({
+      apiKey,
+      systemPrompt,
+      isAnalyze,
+      userText,
+      dataUrl,
+      temperature: 0.55,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Failed to reach OpenAI", detail: String(e) });
+  }
+
+  if (!first.ok) {
+    if (first.error === "openai_http") {
+      return res.status(502).json({ error: "OpenAI API error", detail: first.detail });
+    }
+    return res.status(502).json({
+      error: first.error === "json_parse_content" ? "Model returned non-JSON text" : "Invalid response from OpenAI",
+      detail: first.detail || first.raw,
+    });
+  }
+
+  parsed = first.parsed;
+  normalizeInstagramPayload(parsed);
+  let v1 = validateOutput(parsed);
+
+  if (!v1.ok) {
+    const repairSystem = `${buildSystemPrompt()}\n\nREPAIR: Previous output was rejected. Output ONE complete JSON object. Do not omit interpretation, stories_idea, reel_idea, or any top-level key. post_variants must be exactly 3 objects with variant literally empathy, learning, consultation (English), each with goal, hook, caption strings.`;
+    const repairUser = `${userText}\n\nValidation errors: ${v1.errors.join("; ")}.\nReturn the full JSON again with every required field.`;
+
+    let second;
     try {
-      first = await openAiCompleteJson({
+      second = await openAiCompleteJson({
         apiKey,
-        systemPrompt,
+        systemPrompt: repairSystem,
         isAnalyze,
-        userText,
+        userText: repairUser,
         dataUrl,
-        temperature: 0.55,
+        temperature: 0.35,
       });
     } catch (e) {
-      return res.status(502).json({ error: "Failed to reach OpenAI", detail: String(e) });
+      return res.status(502).json({ error: "Failed to reach OpenAI on retry", detail: String(e) });
     }
 
-    if (!first.ok) {
-      if (first.error === "openai_http") {
-        return res.status(502).json({ error: "OpenAI API error", detail: first.detail });
-      }
-      return res.status(502).json({
-        error: first.error === "json_parse_content" ? "Model returned non-JSON text" : "Invalid response from OpenAI",
-        detail: first.detail || first.raw,
+    if (!second.ok) {
+      return res.status(422).json({
+        error: "Model output failed validation",
+        details: v1.errors,
+        partial: parsed,
+        retry_error: second.detail || second.raw,
       });
     }
 
-    parsed = first.parsed;
+    parsed = second.parsed;
     normalizeInstagramPayload(parsed);
-    let v1 = validateOutput(parsed);
-
-    if (!v1.ok) {
-      const repairSystem = `${buildSystemPrompt()}\n\nREPAIR: Previous output was rejected. Output ONE complete JSON object. Do not omit interpretation, stories_idea, reel_idea, or any top-level key.`;
-      const repairUser = `${userText}\n\nValidation errors: ${v1.errors.join("; ")}.\nReturn the full JSON again with every required field.`;
-
-      let second;
-      try {
-        second = await openAiCompleteJson({
-          apiKey,
-          systemPrompt: repairSystem,
-          isAnalyze,
-          userText: repairUser,
-          dataUrl,
-          temperature: 0.35,
-        });
-      } catch (e) {
-        return res.status(502).json({ error: "Failed to reach OpenAI on retry", detail: String(e) });
-      }
-
-      if (!second.ok) {
-        return res.status(422).json({
-          error: "Model output failed validation",
-          details: v1.errors,
-          partial: parsed,
-          retry_error: second.detail || second.raw,
-        });
-      }
-
-      parsed = second.parsed;
-      normalizeInstagramPayload(parsed);
-    }
   }
 
   normalizeInstagramPayload(parsed);
@@ -581,7 +587,7 @@ module.exports = async (req, res) => {
     meta: {
       mode,
       image_summary: parsed.image_summary,
-      source: useDummy ? "dummy" : "openai",
+      source: "openai",
     },
   });
 };

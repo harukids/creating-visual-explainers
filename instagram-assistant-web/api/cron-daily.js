@@ -111,10 +111,6 @@ module.exports = async (req, res) => {
   const headers = {
     "Content-Type": "application/json",
   };
-  const access = process.env.ACCESS_CODE;
-  if (access) {
-    headers["X-Access-Code"] = access;
-  }
 
   let genRes;
   try {

@@ -117,7 +117,6 @@
     <header class="header">
       <div class="header-badge">Web版 · サーバーでAI処理（キーはブラウザに出ません）</div>
       <h1>今日のインスタ投稿アシスタント</h1>
-      <p>写真を1枚選び、共感・保存・信頼・相談につながる案を生成します。</p>
     </header>
 
     <section class="card" id="form-section">
@@ -134,9 +133,6 @@
 
       <label for="variationHint">再生成ヒント（任意）</label>
       <input type="text" id="variationHint" placeholder="例：学び型を少し強める / よりやさしい言い回しに" />
-
-      <label for="access">アクセス用パスワード（VercelでACCESS_CODEを設定した場合のみ）</label>
-      <input type="password" id="access" autocomplete="off" placeholder="未設定なら空でOK" />
 
       <label class="inline-check" for="notifySlack">
         <input type="checkbox" id="notifySlack" />
@@ -201,17 +197,11 @@
     }
 
     function buildHeaders() {
-      const headers = { "Content-Type": "application/json" };
-      const access = document.getElementById("access").value.trim();
-      if (access) headers["X-Access-Code"] = access;
-      return headers;
+      return { "Content-Type": "application/json" };
     }
 
     function buildStatusText(json, summarySaved) {
       const lines = [];
-      if (json.meta && json.meta.source === "dummy") {
-        lines.push("ダミーモード（固定サンプル）。本番は DUMMY_MODE をオフにしてください。");
-      }
       if (summarySaved) {
         lines.push("画像要約を保存しました（次回から画像なし再生成が使えます）。");
       }
@@ -362,11 +352,9 @@
     function render(d, meta) {
       meta = meta || {};
       const sourceLabel =
-        meta.source === "dummy"
-          ? "ダミーモード（Vercel の環境変数 DUMMY_MODE が有効なときだけ）"
-          : meta.source === "openai"
-            ? "OpenAI API（本番の生成）"
-            : String(meta.source || "—");
+        meta.source === "openai"
+          ? "OpenAI API（サーバー側で生成）"
+          : String(meta.source || "OpenAI API（サーバー側で生成）");
 
       const sm = d.selected_media;
       const interp = d.interpretation;

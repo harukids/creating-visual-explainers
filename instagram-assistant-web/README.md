@@ -22,13 +22,6 @@
 
 - `OPENAI_API_KEY` (必須)
 - `SLACK_WEBHOOK_URL` (Slack通知を使う場合は必須)
-- `ACCESS_CODE` (任意: APIを簡易保護)
-- `DUMMY_MODE` (任意: `true` でOpenAIを呼ばずダミーJSONを返す。課金前の画面確認用)
-
-### セキュリティのメモ
-
-- **ダミーモード**は **`DUMMY_MODE` 環境変数が設定されているときだけ**有効です。リクエストbodyでダミーに切り替えることはできません。
-- URLを公開する場合は、悪用やSlack通知の乱用を防ぐため **`ACCESS_CODE` の設定を推奨**します。
 
 ## 4. ローカル起動
 
@@ -70,7 +63,6 @@ npx vercel@latest dev
 任意:
 
 - `CRON_AUDIENCE` / `CRON_NG_WORDS` / `CRON_VARIATION_HINT` … 生成プロンプトに渡す文字列
-- `ACCESS_CODE` を設定している場合、Cron からも同じ値が自動で付きます
 
 ### 動作のしかた
 
