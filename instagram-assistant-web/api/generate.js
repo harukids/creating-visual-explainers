@@ -35,17 +35,17 @@ function buildSlackMessage(result) {
     `*評価* 共感:${result.evaluation?.empathy ?? "-"} 保存:${result.evaluation?.save ?? "-"} コメント:${result.evaluation?.comment ?? "-"} 導線:${result.evaluation?.lead ?? "-"} 世界観:${result.evaluation?.brand_fit ?? "-"}`,
     "",
     `*投稿文（共感型）*`,
-    clip(empathy.caption, 300),
+    clip(empathy.caption, 900),
     "",
     `*投稿文（学び型）*`,
-    clip(learning.caption, 300),
+    clip(learning.caption, 900),
     "",
     `*投稿文（相談導線型）*`,
-    clip(consultation.caption, 300),
+    clip(consultation.caption, 900),
     "",
     `*ハッシュタグ* ${tagsLine}`,
   ];
-  return clip(lines.join("\n"), 3500);
+  return clip(lines.join("\n"), 5000);
 }
 
 async function sendSlack(webhookUrl, text) {
@@ -209,17 +209,17 @@ function normalizePostVariants(obj) {
     empathy: {
       goal: "読者の気持ちに寄り添う",
       hook: "まず共感の一言",
-      caption: `${baseCaption}\n\n（共感型：安心感のあるトーンで）`,
+      caption: `${baseCaption}について、いまの気持ちにそっと寄り添う一文から始めます。\n\n写真のような瞬間は、誰にでもあるけれど言葉にしにくいことが多いです。だからこそ、整え直すきっかけを、やさしく共有したいです。\n\n（※モデル出力が短かった場合の補完文案です。再生成で長めの案を出してください。）`,
     },
     learning: {
       goal: "小さな学び・視点を渡す",
       hook: "気づきを一言で",
-      caption: `${baseCaption}\n\n（学び型：具体的なコツや視点）`,
+      caption: `${baseCaption}をテーマに、今日ひとつだけ持ち帰れる視点を書きます。\n\n毎日を丁寧に積み重ねるほど、見えてくるコツや例外もあります。難しく語らず、日常に落とし込める形でまとめました。\n\n（※補完文案のため短い場合は再生成を試してください。）`,
     },
     consultation: {
       goal: "自然な相談・DM導線",
       hook: "続きは個別で、と自然に",
-      caption: `${baseCaption}\n\n（相談導線型：押し付けない一言）`,
+      caption: `${baseCaption}のまわりで、もやもやが続いている方へ。\n\nここでは断定せず、一緒に整理できる余地だけを残したいと思っています。もし一言だけ共有してよければ、DMでも大丈夫です。\n\n（※押し売りはしない前提の補完文案です。）`,
     },
   };
 
@@ -381,6 +381,11 @@ function buildSystemPrompt() {
     "- evaluation: integers 1-5 for empathy, save, comment, lead, brand_fit. MUST set scale_max to the number 5 (not 10). MUST include note as a string (trust-first scoring explanation).",
     "- idea_cards: 3 or 4 items, each { title?: string, text: string }.",
     "- post_variants: exactly 3 objects in order. variant MUST be the English strings exactly: \"empathy\", \"learning\", \"consultation\" (one each, no synonyms). Each object MUST have goal, hook, caption as strings (Japanese). caption may use \\n for line breaks.",
+    "",
+    "Post length — post_variants.caption (IMPORTANT):",
+    "- Each caption must be a full Instagram-ready body, NOT a single short sentence. Aim for roughly 400–900 Japanese characters per caption (longer is OK when it adds concrete detail, mini-story, or layered nuance). Avoid ultra-short captions.",
+    "- Structure with multiple paragraphs (typically 3–6 blocks); separate paragraphs with a blank line inside caption using newline characters (JSON string may contain \\n between paragraphs). Flow example: opening that lands emotionally → concrete scene or observation → gentle insight → soft landing (question or breathing-room close). Consultation variant may end with a low-pressure invitation.",
+    "- hook should be punchy but the caption field must still carry the bulk of the story; do not offload everything into hook alone.",
     "- hashtags: array of strings, may include #.",
     "- self_check.items: array of { label: string, passed: boolean } for quality checks.",
     "- image_summary: concise Japanese summary (2-4 sentences) of the media context for cheap text-only regeneration.",
@@ -540,6 +545,7 @@ module.exports = async (req, res) => {
     ngWords ? `Avoid or be careful with: ${ngWords}` : "",
     isRegenerate ? `image_summary: ${imageSummary}` : "",
     variationHint ? `Variation request: ${variationHint}` : "",
+    "post_variants.caption: write full-length Japanese captions per system instructions (~400–900 characters each, multiple paragraphs with blank lines). Do not output one-line or token-short captions.",
     "Fill every required field in the JSON schema described in system instructions.",
   ]
     .filter(Boolean)
@@ -575,7 +581,7 @@ module.exports = async (req, res) => {
   let v1 = validateOutput(parsed);
 
   if (!v1.ok) {
-    const repairSystem = `${buildSystemPrompt()}\n\nREPAIR: Previous output was rejected. Output ONE complete JSON object. Do not omit interpretation, stories_idea, reel_idea, or any top-level key. post_variants must be exactly 3 objects with variant literally empathy, learning, consultation (English), each with goal, hook, caption strings.`;
+    const repairSystem = `${buildSystemPrompt()}\n\nREPAIR: Previous output was rejected. Output ONE complete JSON object. Do not omit interpretation, stories_idea, reel_idea, or any top-level key. post_variants must be exactly 3 objects with variant literally empathy, learning, consultation (English), each with goal, hook, caption strings. Each caption must stay substantive (~400+ Japanese characters, multiple paragraphs with blank lines) per system rules.`;
     const repairUser = `${userText}\n\nValidation errors: ${v1.errors.join("; ")}.\nReturn the full JSON again with every required field.`;
 
     let second;
