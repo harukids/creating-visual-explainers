@@ -8,6 +8,7 @@
 - 画像要約を保存し、再生成時は画像を再送せずテキストだけで生成（コスト削減）
 - 画面に結果を見やすく表示
 - チェックON時にSlackへ要約通知を送信
+- （オプション）**毎日定時**に `api/cron-daily` が動き、投稿案を生成して Slack へ送る
 
 ## 2. 事前準備
 
@@ -48,12 +49,44 @@ npx vercel@latest dev
 4. Environment Variables に上記キーを登録
 5. Deploy
 
-## 6. 毎日運用への拡張（次のステップ）
+## 6. 毎日自動（Cron）
 
-1. 当日画像を保存する場所（Supabase Storage など）を決める
-2. Cron用API (`api/cron-daily.js`) を追加
-3. Vercel Cronで毎朝実行
-4. `api/generate` を呼び、結果をSlackへ通知
+`vercel.json` で **`0 23 * * *`（UTC）** に `/api/cron-daily` が呼ばれます。  
+日本時間では **毎日おおよそ 朝 8:00（JST）** 相当です（サマータイムは無いので UTC+9 固定）。
+
+### 必要な環境変数（Vercel）
+
+| 名前 | 説明 |
+|------|------|
+| `CRON_SECRET` | 長めのランダム文字列。Cron 実行時の `Authorization: Bearer …` と一致させる（Vercel の Cron 設定でも同じ値を参照） |
+| `SLACK_WEBHOOK_URL` | 通知先（未設定ならスキップメッセージも送れない） |
+| **どちらか一方** | 下記 `DAILY_IMAGE_URL` **または** `DAILY_IMAGE_SUMMARY` |
+
+**ソース（どちらか1つ）**
+
+- **`DAILY_IMAGE_URL`** … 公開されている画像の HTTPS URL（その日の写真）。`/api/generate` の **analyze** で処理（画像トークンがかかる）。
+- **`DAILY_IMAGE_SUMMARY`** … テキストだけの要約（アプリで一度生成した要約をここにコピーしてもよい）。**regenerate** のみ（画像は送らず安い）。
+
+任意:
+
+- `CRON_AUDIENCE` / `CRON_NG_WORDS` / `CRON_VARIATION_HINT` … 生成プロンプトに渡す文字列
+- `ACCESS_CODE` を設定している場合、Cron からも同じ値が自動で付きます
+
+### 動作のしかた
+
+1. 上記を Vercel の Environment Variables に保存し、**Redeploy**
+2. デプロイ後、Vercel ダッシュボードの **Cron Jobs** で `/api/cron-daily` が有効か確認
+3. 設定が足りないときは Slack に短い警告が届くことあり
+
+### 手動テスト（任意）
+
+```bash
+curl -sS -H "Authorization: Bearer YOUR_CRON_SECRET" "https://あなたのドメイン.vercel.app/api/cron-daily"
+```
+
+### 将来の拡張
+
+画像を毎日自動で差し替えるなら、**Supabase Storage** などにアップロードし、その **公開 URL を `DAILY_IMAGE_URL` に書き換える**運用か、別APIで URL を取得する形にできます。
 
 ## 7. LINE追加は後でOK
 

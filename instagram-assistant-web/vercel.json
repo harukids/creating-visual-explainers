@@ -2,6 +2,15 @@
   "functions": {
     "api/generate.js": {
       "maxDuration": 60
+    },
+    "api/cron-daily.js": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron-daily",
+      "schedule": "0 23 * * *"
+    }
+  ]
 }
