@@ -1,0 +1,6 @@
+{
+  "name": "instagram-assistant-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Instagram post assistant — static UI + Vercel serverless API"
+}

@@ -1,2 +1,4 @@
 output/*.html
 deploy-history.log
+instagram-assistant-web/.env
+instagram-assistant-web/node_modules

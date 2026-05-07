@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>今日のインスタ投稿アシスタント</title>
+  <style>
+    :root {
+      --bg: #faf8f5;
+      --surface: #ffffff;
+      --beige: #f3ebe3;
+      --pink: #e8c4c8;
+      --pink-soft: #f5e6e8;
+      --text: #3d3538;
+      --text-muted: #7a6e72;
+      --accent: #c48b94;
+      --radius: 16px;
+      --radius-sm: 12px;
+      --shadow: 0 8px 32px rgba(61, 53, 56, 0.08);
+      --max: 420px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+      background: linear-gradient(180deg, var(--bg) 0%, var(--beige) 100%);
+      color: var(--text);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    .app { max-width: var(--max); margin: 0 auto; padding: 24px 18px 48px; }
+    .header { text-align: center; margin-bottom: 24px; }
+    .header-badge {
+      display: inline-block; font-size: 11px; letter-spacing: 0.08em; color: var(--accent);
+      background: var(--pink-soft); padding: 6px 14px; border-radius: 999px; margin-bottom: 10px;
+    }
+    .header h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 8px; }
+    .header p { margin: 0; font-size: 13px; color: var(--text-muted); }
+    .card {
+      background: var(--surface); border-radius: var(--radius); padding: 20px; margin-bottom: 18px;
+      box-shadow: var(--shadow); border: 1px solid rgba(232, 196, 200, 0.35);
+    }
+    .card-title {
+      font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: 0.06em;
+      margin: 0 0 14px; display: flex; align-items: center; gap: 8px;
+    }
+    .card-title::before {
+      content: ""; width: 4px; height: 14px; background: var(--pink); border-radius: 2px;
+    }
+    label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+    input[type="text"], input[type="password"], textarea {
+      width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--beige);
+      font-family: inherit; font-size: 14px; margin-bottom: 12px; background: #fff;
+    }
+    textarea { min-height: 64px; resize: vertical; }
+    input[type="file"] { margin-bottom: 12px; font-size: 13px; }
+    .btn {
+      display: block; width: 100%; padding: 14px 18px; font-size: 14px; font-weight: 600;
+      border: none; border-radius: 12px; cursor: pointer; font-family: inherit;
+      background: linear-gradient(135deg, #d4a5ad, var(--accent)); color: #fff;
+      box-shadow: 0 4px 16px rgba(196, 139, 148, 0.35);
+    }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .preview-img {
+      width: 100%; border-radius: var(--radius-sm); aspect-ratio: 4/5; object-fit: cover;
+      background: var(--beige); margin-top: 8px;
+    }
+    .err { color: #b54a54; font-size: 13px; white-space: pre-wrap; }
+    .ok { color: #3f6f4b; font-size: 13px; white-space: pre-wrap; }
+    .hidden { display: none !important; }
+    .inline-check { display: flex; align-items: center; gap: 8px; margin: 8px 0 14px; font-size: 13px; color: var(--text-muted); }
+    .inline-check input { width: 16px; height: 16px; }
+    #result .interpret-item {
+      background: var(--pink-soft); padding: 14px; border-radius: var(--radius-sm); margin-bottom: 10px;
+    }
+    #result .interpret-item dt { font-size: 11px; color: var(--accent); margin: 0 0 4px; font-weight: 600; }
+    #result .interpret-item dd { margin: 0; font-size: 14px; }
+    .eval-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 8px; }
+    .stars { color: var(--accent); letter-spacing: 2px; }
+    .tip { display: flex; gap: 10px; font-size: 13px; padding: 10px 12px; background: var(--beige); border-radius: 10px; margin-bottom: 8px; }
+    .tip-num {
+      flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%; background: var(--pink-soft);
+      color: var(--accent); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+    }
+    .post-variant {
+      margin-bottom: 18px; padding: 18px; border-radius: var(--radius-sm);
+      background: linear-gradient(145deg, #fffefb 0%, var(--pink-soft) 100%);
+      border: 1px solid rgba(232, 196, 200, 0.6);
+    }
+    .post-type { display: inline-block; font-size: 11px; font-weight: 700; color: #fff; background: var(--accent); padding: 4px 12px; border-radius: 999px; margin-bottom: 10px; }
+    .post-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+    .caption-box {
+      font-size: 15px; line-height: 1.85; white-space: pre-wrap; padding: 14px; background: var(--surface);
+      border-radius: 10px; border-left: 4px solid var(--pink);
+    }
+    .hashtag { display: inline-block; font-size: 12px; color: var(--accent); background: var(--pink-soft); padding: 6px 12px; border-radius: 999px; margin: 0 6px 6px 0; }
+    .idea-block { padding: 14px; background: var(--beige); border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 10px; }
+    .idea-block h4 { margin: 0 0 8px; font-size: 12px; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-badge">Web版 · サーバーでAI処理（キーはブラウザに出ません）</div>
+      <h1>今日のインスタ投稿アシスタント</h1>
+      <p>写真を1枚選び、共感・保存・信頼・相談につながる案を生成します。</p>
+    </header>
+
+    <section class="card" id="form-section">
+      <h2 class="card-title">入力</h2>
+      <label for="file">写真（1枚）</label>
+      <input type="file" id="file" accept="image/*" />
+      <img id="preview" class="preview-img hidden" alt="" />
+
+      <label for="audience">発信の文脈（任意）</label>
+      <textarea id="audience" placeholder="例：子育てママ向けコーチ / デザイナーとしての日常 など"></textarea>
+
+      <label for="ng">避けたい表現・NG（任意）</label>
+      <input type="text" id="ng" placeholder="例：煽り・断定的な医療表現 など" />
+
+      <label for="access">アクセス用パスワード（VercelでACCESS_CODEを設定した場合のみ）</label>
+      <input type="password" id="access" autocomplete="off" placeholder="未設定なら空でOK" />
+
+      <label class="inline-check" for="notifySlack">
+        <input type="checkbox" id="notifySlack" />
+        生成後にSlackへ通知する（SLACK_WEBHOOK_URL設定時）
+      </label>
+
+      <button type="button" class="btn" id="run">この写真で案を生成</button>
+      <p class="err hidden" id="err"></p>
+      <p class="ok hidden" id="ok"></p>
+    </section>
+
+    <div id="result" class="hidden"></div>
+  </div>
+
+  <script>
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function stars(n) {
+      const x = Math.max(1, Math.min(5, Math.round(Number(n) || 0)));
+      return "★".repeat(x) + "☆".repeat(5 - x);
+    }
+
+    const variantLabel = {
+      empathy: "① 共感型",
+      learning: "② 学び型",
+      consultation: "③ 相談導線型",
+    };
+
+    const fileInput = document.getElementById("file");
+    const preview = document.getElementById("preview");
+    const runBtn = document.getElementById("run");
+    const errEl = document.getElementById("err");
+    const okEl = document.getElementById("ok");
+    const resultEl = document.getElementById("result");
+
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) {
+        preview.classList.add("hidden");
+        return;
+      }
+      preview.src = URL.createObjectURL(f);
+      preview.classList.remove("hidden");
+    });
+
+    runBtn.addEventListener("click", async () => {
+      errEl.classList.add("hidden");
+      okEl.classList.add("hidden");
+      resultEl.classList.add("hidden");
+      resultEl.innerHTML = "";
+
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) {
+        errEl.textContent = "写真を1枚選んでください。";
+        errEl.classList.remove("hidden");
+        return;
+      }
+
+      runBtn.disabled = true;
+      try {
+        const buf = await f.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let bin = "";
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        }
+        const imageBase64 = btoa(bin);
+        const mimeType = f.type || "image/jpeg";
+
+        if (bytes.length > 4 * 1024 * 1024) {
+          throw new Error("画像は4MB未満にしてください（無料ホスティングの制限対策）。");
+        }
+
+        const headers = { "Content-Type": "application/json" };
+        const access = document.getElementById("access").value.trim();
+        if (access) headers["X-Access-Code"] = access;
+
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            imageBase64,
+            mimeType,
+            audience: document.getElementById("audience").value.trim(),
+            ngWords: document.getElementById("ng").value.trim(),
+            notifySlack: document.getElementById("notifySlack").checked,
+            clientDateLabel: new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
+          }),
+        });
+
+        const json = await res.json();
+        if (!res.ok) {
+          const msg = json.error || "エラーが発生しました";
+          const detail = json.details ? "\n" + json.details.join("\n") : json.detail || "";
+          throw new Error(msg + detail);
+        }
+        if (!json.ok || !json.data) throw new Error("想定外の応答です");
+
+        if (json.slack && json.slack.requested) {
+          const msg = json.slack.sent
+            ? "Slack通知を送信しました。"
+            : `Slack通知は送信されませんでした: ${json.slack.skippedReason || "unknown reason"}`;
+          okEl.textContent = msg;
+          okEl.classList.remove("hidden");
+        }
+
+        render(json.data);
+        resultEl.classList.remove("hidden");
+        resultEl.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (e) {
+        errEl.textContent = e.message || String(e);
+        errEl.classList.remove("hidden");
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+
+    function render(d) {
+      const sm = d.selected_media;
+      const interp = d.interpretation;
+      const ev = d.evaluation;
+      const posts = d.post_variants.slice().sort((a, b) => {
+        const order = { empathy: 0, learning: 1, consultation: 2 };
+        return (order[a.variant] ?? 9) - (order[b.variant] ?? 9);
+      });
+
+      let html = "";
+
+      html += `<section class="card"><h2 class="card-title">選ばれたメディア</h2>`;
+      html += `<p style="font-size:13px;color:var(--text-muted)">${escapeHtml(sm.selection_summary)}</p></section>`;
+
+      if (d.alternative_media && d.alternative_media.length) {
+        html += `<section class="card"><h2 class="card-title">ほかの候補</h2><ul style="margin:0;padding-left:18px;font-size:13px;">`;
+        d.alternative_media.forEach((a) => {
+          html += `<li>${escapeHtml(a.label)} <span style="color:var(--text-muted)">(${escapeHtml(a.kind)})</span></li>`;
+        });
+        html += `</ul></section>`;
+      }
+
+      html += `<section class="card"><h2 class="card-title">解釈</h2>`;
+      html += `<dl>`;
+      [["テーマ", interp.theme], ["方向性", interp.direction], ["理由", interp.reason]].forEach(([k, v]) => {
+        html += `<div class="interpret-item"><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`;
+      });
+      html += `</dl></section>`;
+
+      html += `<section class="card"><h2 class="card-title">投稿評価</h2>`;
+      [
+        ["共感", ev.empathy],
+        ["保存", ev.save],
+        ["コメント", ev.comment],
+        ["集客導線", ev.lead],
+        ["世界観一致", ev.brand_fit],
+      ].forEach(([label, n]) => {
+        html += `<div class="eval-row"><span>${escapeHtml(label)}</span><span class="stars">${stars(n)}</span></div>`;
+      });
+      html += `<p style="font-size:11px;color:var(--text-muted);margin-top:12px;">${escapeHtml(ev.note)}</p></section>`;
+
+      html += `<section class="card"><h2 class="card-title">豆知識・切り口</h2>`;
+      d.idea_cards.forEach((c, i) => {
+        html += `<div class="tip"><span class="tip-num">${i + 1}</span><span>${escapeHtml(c.text)}</span></div>`;
+      });
+      html += `</section>`;
+
+      html += `<section class="card"><h2 class="card-title">投稿文（3パターン）</h2>`;
+      posts.forEach((p) => {
+        html += `<article class="post-variant">`;
+        html += `<span class="post-type">${escapeHtml(variantLabel[p.variant] || p.variant)}</span>`;
+        html += `<p class="post-meta"><strong>ゴール：</strong>${escapeHtml(p.goal)} ／ <strong>フック：</strong>${escapeHtml(p.hook)}</p>`;
+        html += `<div class="caption-box">${escapeHtml(p.caption)}</div>`;
+        html += `</article>`;
+      });
+      html += `</section>`;
+
+      html += `<section class="card"><h2 class="card-title">ハッシュタグ</h2><div>`;
+      d.hashtags.forEach((h) => {
+        html += `<span class="hashtag">${escapeHtml(h)}</span>`;
+      });
+      html += `</div></section>`;
+
+      html += `<section class="card"><h2 class="card-title">ストーリーズ / リール</h2>`;
+      html += `<div class="idea-block"><h4>ストーリーズ案</h4><p style="margin:0;white-space:pre-wrap;">${escapeHtml(d.stories_idea)}</p></div>`;
+      html += `<div class="idea-block"><h4>リール案</h4><p style="margin:0;white-space:pre-wrap;">${escapeHtml(d.reel_idea)}</p></div>`;
+      html += `</section>`;
+
+      html += `<section class="card"><h2 class="card-title">セルフチェック</h2>`;
+      d.self_check.items.forEach((it) => {
+        html += `<p style="font-size:13px;margin:8px 0;">${it.passed ? "✓" : "·"} ${escapeHtml(it.label)}</p>`;
+      });
+      html += `</section>`;
+
+      resultEl.innerHTML = html;
+    }
+  </script>
+</body>
+</html>
