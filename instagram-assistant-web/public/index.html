@@ -61,6 +61,13 @@
       background: linear-gradient(135deg, #d4a5ad, var(--accent)); color: #fff;
       box-shadow: 0 4px 16px rgba(196, 139, 148, 0.35);
     }
+    .btn-secondary {
+      background: #fff;
+      color: var(--accent);
+      border: 1px solid var(--pink);
+      box-shadow: none;
+      margin-top: 10px;
+    }
     .btn:disabled { opacity: 0.55; cursor: not-allowed; }
     .preview-img {
       width: 100%; border-radius: var(--radius-sm); aspect-ratio: 4/5; object-fit: cover;
@@ -119,6 +126,9 @@
       <label for="ng">避けたい表現・NG（任意）</label>
       <input type="text" id="ng" placeholder="例：煽り・断定的な医療表現 など" />
 
+      <label for="variationHint">再生成ヒント（任意）</label>
+      <input type="text" id="variationHint" placeholder="例：学び型を少し強める / よりやさしい言い回しに" />
+
       <label for="access">アクセス用パスワード（VercelでACCESS_CODEを設定した場合のみ）</label>
       <input type="password" id="access" autocomplete="off" placeholder="未設定なら空でOK" />
 
@@ -127,7 +137,8 @@
         生成後にSlackへ通知する（SLACK_WEBHOOK_URL設定時）
       </label>
 
-      <button type="button" class="btn" id="run">この写真で案を生成</button>
+      <button type="button" class="btn" id="runAnalyze">この写真で初回案を生成</button>
+      <button type="button" class="btn btn-secondary" id="runRegenerate">テキストだけ再生成（画像は送らない）</button>
       <p class="err hidden" id="err"></p>
       <p class="ok hidden" id="ok"></p>
     </section>
@@ -155,12 +166,86 @@
       consultation: "③ 相談導線型",
     };
 
+    const STORAGE_IMAGE_SUMMARY = "ig:lastImageSummary:v1";
     const fileInput = document.getElementById("file");
     const preview = document.getElementById("preview");
-    const runBtn = document.getElementById("run");
+    const runAnalyzeBtn = document.getElementById("runAnalyze");
+    const runRegenerateBtn = document.getElementById("runRegenerate");
     const errEl = document.getElementById("err");
     const okEl = document.getElementById("ok");
     const resultEl = document.getElementById("result");
+
+    function getCommonPayload() {
+      return {
+        audience: document.getElementById("audience").value.trim(),
+        ngWords: document.getElementById("ng").value.trim(),
+        variationHint: document.getElementById("variationHint").value.trim(),
+        notifySlack: document.getElementById("notifySlack").checked,
+        clientDateLabel: new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
+      };
+    }
+
+    function setBusy(flag) {
+      runAnalyzeBtn.disabled = flag;
+      runRegenerateBtn.disabled = flag;
+    }
+
+    function clearMessages() {
+      errEl.classList.add("hidden");
+      okEl.classList.add("hidden");
+    }
+
+    function buildHeaders() {
+      const headers = { "Content-Type": "application/json" };
+      const access = document.getElementById("access").value.trim();
+      if (access) headers["X-Access-Code"] = access;
+      return headers;
+    }
+
+    function buildStatusText(json, summarySaved) {
+      const lines = [];
+      if (summarySaved) {
+        lines.push("画像要約を保存しました（次回から画像なし再生成が使えます）。");
+      }
+      if (json.slack && json.slack.requested) {
+        lines.push(
+          json.slack.sent
+            ? "Slack通知を送信しました。"
+            : `Slack通知は送信されませんでした: ${json.slack.skippedReason || "unknown reason"}`
+        );
+      }
+      return lines.join("\n");
+    }
+
+    async function postGenerate(payload) {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: buildHeaders(),
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        const msg = json.error || "エラーが発生しました";
+        const detail = json.details ? "\n" + json.details.join("\n") : json.detail || "";
+        throw new Error(msg + detail);
+      }
+      if (!json.ok || !json.data) throw new Error("想定外の応答です");
+      return json;
+    }
+
+    async function fileToBase64(file) {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      if (bytes.length > 4 * 1024 * 1024) {
+        throw new Error("画像は4MB未満にしてください（無料ホスティングの制限対策）。");
+      }
+      let bin = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return { imageBase64: btoa(bin), mimeType: file.type || "image/jpeg" };
+    }
 
     fileInput.addEventListener("change", () => {
       const f = fileInput.files && fileInput.files[0];
@@ -172,9 +257,8 @@
       preview.classList.remove("hidden");
     });
 
-    runBtn.addEventListener("click", async () => {
-      errEl.classList.add("hidden");
-      okEl.classList.add("hidden");
+    runAnalyzeBtn.addEventListener("click", async () => {
+      clearMessages();
       resultEl.classList.add("hidden");
       resultEl.innerHTML = "";
 
@@ -185,52 +269,20 @@
         return;
       }
 
-      runBtn.disabled = true;
+      setBusy(true);
       try {
-        const buf = await f.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        let bin = "";
-        const chunk = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunk) {
-          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-        }
-        const imageBase64 = btoa(bin);
-        const mimeType = f.type || "image/jpeg";
-
-        if (bytes.length > 4 * 1024 * 1024) {
-          throw new Error("画像は4MB未満にしてください（無料ホスティングの制限対策）。");
-        }
-
-        const headers = { "Content-Type": "application/json" };
-        const access = document.getElementById("access").value.trim();
-        if (access) headers["X-Access-Code"] = access;
-
-        const res = await fetch("/api/generate", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            imageBase64,
-            mimeType,
-            audience: document.getElementById("audience").value.trim(),
-            ngWords: document.getElementById("ng").value.trim(),
-            notifySlack: document.getElementById("notifySlack").checked,
-            clientDateLabel: new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
-          }),
+        const image = await fileToBase64(f);
+        const json = await postGenerate({
+          mode: "analyze",
+          ...image,
+          ...getCommonPayload(),
         });
-
-        const json = await res.json();
-        if (!res.ok) {
-          const msg = json.error || "エラーが発生しました";
-          const detail = json.details ? "\n" + json.details.join("\n") : json.detail || "";
-          throw new Error(msg + detail);
+        if (json.meta && json.meta.image_summary) {
+          localStorage.setItem(STORAGE_IMAGE_SUMMARY, json.meta.image_summary);
         }
-        if (!json.ok || !json.data) throw new Error("想定外の応答です");
-
-        if (json.slack && json.slack.requested) {
-          const msg = json.slack.sent
-            ? "Slack通知を送信しました。"
-            : `Slack通知は送信されませんでした: ${json.slack.skippedReason || "unknown reason"}`;
-          okEl.textContent = msg;
+        const status = buildStatusText(json, Boolean(json.meta && json.meta.image_summary));
+        if (status) {
+          okEl.textContent = status;
           okEl.classList.remove("hidden");
         }
 
@@ -241,7 +293,44 @@
         errEl.textContent = e.message || String(e);
         errEl.classList.remove("hidden");
       } finally {
-        runBtn.disabled = false;
+        setBusy(false);
+      }
+    });
+
+    runRegenerateBtn.addEventListener("click", async () => {
+      clearMessages();
+      resultEl.classList.add("hidden");
+      resultEl.innerHTML = "";
+
+      const savedSummary = localStorage.getItem(STORAGE_IMAGE_SUMMARY);
+      if (!savedSummary) {
+        errEl.textContent = "先に「この写真で初回案を生成」を実行してください。画像要約が未保存です。";
+        errEl.classList.remove("hidden");
+        return;
+      }
+
+      setBusy(true);
+      try {
+        const json = await postGenerate({
+          mode: "regenerate",
+          imageSummary: savedSummary,
+          ...getCommonPayload(),
+        });
+        if (json.meta && json.meta.image_summary) {
+          localStorage.setItem(STORAGE_IMAGE_SUMMARY, json.meta.image_summary);
+        }
+        const status = buildStatusText(json, false) || "テキストのみで再生成しました（画像は再送していません）。";
+        okEl.textContent = status;
+        okEl.classList.remove("hidden");
+
+        render(json.data);
+        resultEl.classList.remove("hidden");
+        resultEl.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (e) {
+        errEl.textContent = e.message || String(e);
+        errEl.classList.remove("hidden");
+      } finally {
+        setBusy(false);
       }
     });
 

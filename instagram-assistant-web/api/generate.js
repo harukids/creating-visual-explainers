@@ -150,6 +150,9 @@ function validateOutput(obj) {
 
   if (typeof obj.stories_idea !== "string") errors.push("stories_idea");
   if (typeof obj.reel_idea !== "string") errors.push("reel_idea");
+  if ("image_summary" in obj && typeof obj.image_summary !== "string") {
+    errors.push("image_summary must be string when present");
+  }
 
   const sc = obj.self_check;
   if (!sc || typeof sc !== "object" || !Array.isArray(sc.items)) {
@@ -181,7 +184,19 @@ function buildSystemPrompt() {
     "- post_variants: exactly 3 objects with variant empathy, learning, consultation (each once). caption may use \\n for line breaks.",
     "- hashtags: array of strings, may include #.",
     "- self_check.items: array of { label: string, passed: boolean } for quality checks.",
+    "- image_summary: concise Japanese summary (2-4 sentences) of the media context for cheap text-only regeneration.",
   ].join("\n");
+}
+
+function buildImageSummaryFallback(parsed) {
+  const theme = parsed?.interpretation?.theme || "";
+  const reason = parsed?.interpretation?.reason || "";
+  const selection = parsed?.selected_media?.selection_summary || "";
+  const lines = [theme, reason, selection].filter(Boolean);
+  if (!lines.length) {
+    return "日常の雰囲気とテーマを短く整理した要約。再生成時はこの要約を前提に文案だけ更新する。";
+  }
+  return lines.join(" ").slice(0, 500);
 }
 
 module.exports = async (req, res) => {
@@ -225,21 +240,35 @@ module.exports = async (req, res) => {
     mimeType = "image/jpeg",
     audience = "",
     ngWords = "",
+    mode = "analyze",
+    imageSummary = "",
+    variationHint = "",
     notifySlack = false,
     clientDateLabel = "",
   } = body || {};
-
-  if (!imageBase64 || typeof imageBase64 !== "string") {
-    return res.status(400).json({ error: "imageBase64 (base64 string, no data: prefix) is required" });
+  const isRegenerate = mode === "regenerate";
+  const isAnalyze = mode === "analyze";
+  if (!isAnalyze && !isRegenerate) {
+    return res.status(400).json({ error: "mode must be analyze or regenerate" });
+  }
+  if (isAnalyze && (!imageBase64 || typeof imageBase64 !== "string")) {
+    return res.status(400).json({ error: "imageBase64 (base64 string, no data: prefix) is required in analyze mode" });
+  }
+  if (isRegenerate && (!imageSummary || typeof imageSummary !== "string")) {
+    return res.status(400).json({ error: "imageSummary is required in regenerate mode" });
   }
 
-  const dataUrl = `data:${mimeType};base64,${imageBase64}`;
+  const dataUrl = isAnalyze ? `data:${mimeType};base64,${imageBase64}` : "";
 
   const systemPrompt = buildSystemPrompt();
   const userText = [
-    "Analyze this image for Instagram post ideas.",
+    isAnalyze
+      ? "Analyze this image for Instagram post ideas."
+      : "Regenerate Instagram post ideas from the given image_summary only (do not assume new visuals).",
     audience ? `Target / brand context: ${audience}` : "",
     ngWords ? `Avoid or be careful with: ${ngWords}` : "",
+    isRegenerate ? `image_summary: ${imageSummary}` : "",
+    variationHint ? `Variation request: ${variationHint}` : "",
     "Fill every required field in the JSON schema described in system instructions.",
   ]
     .filter(Boolean)
@@ -261,10 +290,12 @@ module.exports = async (req, res) => {
           { role: "system", content: systemPrompt },
           {
             role: "user",
-            content: [
-              { type: "text", text: userText },
-              { type: "image_url", image_url: { url: dataUrl } },
-            ],
+            content: isAnalyze
+              ? [
+                  { type: "text", text: userText },
+                  { type: "image_url", image_url: { url: dataUrl } },
+                ]
+              : [{ type: "text", text: userText }],
           },
         ],
       }),
@@ -305,6 +336,9 @@ module.exports = async (req, res) => {
       partial: parsed,
     });
   }
+  if (!parsed.image_summary || typeof parsed.image_summary !== "string") {
+    parsed.image_summary = isRegenerate && imageSummary ? imageSummary : buildImageSummaryFallback(parsed);
+  }
 
   const slackStatus = {
     requested: Boolean(notifySlack),
@@ -327,5 +361,13 @@ module.exports = async (req, res) => {
     }
   }
 
-  return res.status(200).json({ ok: true, data: parsed, slack: slackStatus });
+  return res.status(200).json({
+    ok: true,
+    data: parsed,
+    slack: slackStatus,
+    meta: {
+      mode,
+      image_summary: parsed.image_summary,
+    },
+  });
 };
