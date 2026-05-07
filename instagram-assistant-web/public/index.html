@@ -137,6 +137,9 @@
       <label for="variationHint">再生成ヒント（任意）</label>
       <input type="text" id="variationHint" placeholder="例：学び型を少し強める / よりやさしい言い回しに" />
 
+      <label for="generateSecret">接続シークレット（任意）</label>
+      <input type="password" id="generateSecret" autocomplete="off" placeholder="Vercel で GENERATE_SECRET を設定したときだけ同じ値を入力（このブラウザにのみ一時保存）" />
+
       <label class="inline-check" for="notifySlack">
         <input type="checkbox" id="notifySlack" />
         生成後にSlackへ通知する（SLACK_WEBHOOK_URL設定時）
@@ -172,6 +175,18 @@
     };
 
     const STORAGE_IMAGE_SUMMARY = "ig:lastImageSummary:v1";
+    const STORAGE_GENERATE_SECRET = "ig:generateSecret:v1";
+
+    const generateSecretInput = document.getElementById("generateSecret");
+    try {
+      const saved = sessionStorage.getItem(STORAGE_GENERATE_SECRET);
+      if (saved) generateSecretInput.value = saved;
+    } catch (_) {}
+    generateSecretInput.addEventListener("change", () => {
+      try {
+        sessionStorage.setItem(STORAGE_GENERATE_SECRET, generateSecretInput.value.trim());
+      } catch (_) {}
+    });
     const fileInput = document.getElementById("file");
     const preview = document.getElementById("preview");
     const runAnalyzeBtn = document.getElementById("runAnalyze");
@@ -201,7 +216,10 @@
     }
 
     function buildHeaders() {
-      return { "Content-Type": "application/json" };
+      const headers = { "Content-Type": "application/json" };
+      const tok = document.getElementById("generateSecret").value.trim();
+      if (tok) headers["Authorization"] = "Bearer " + tok;
+      return headers;
     }
 
     function buildStatusText(json, summarySaved) {

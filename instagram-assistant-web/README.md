@@ -27,6 +27,16 @@
 
 コピペ用の例文は **`VERCEL_DEFAULT_CONTEXT.txt`** を参照（ブランドに合わせて編集してよい）。
 - `BRAND_GUIDELINES` (任意: 複数行可。**設定すると** `api/generate.js` 内の既定ブランド文を**まるごと置き換え**。チーム用テンプレに差し替えるときに使用)
+- `GENERATE_SECRET` (任意: **設定したら** `/api/generate` は `Authorization: Bearer <同じ値>` が必須。第三者の乱用・課金スパム対策。Cron は同一環境変数を自動付与。ブラウザでは画面の「接続シークレット」に同じ値を入れる)
+- `DAILY_IMAGE_ALLOWED_HOSTS` (任意: Cron の `DAILY_IMAGE_URL` のホストを限定。**カンマ区切り**のホスト名。例: `cdn.example.com,images.example.com`。未設定なら https のみ許可でホストは任意)
+
+### セキュリティのメモ（実装済みの挙動）
+
+- **`GENERATE_SECRET` なし** … 従来どおり誰でも POST 可能（公開 URL の場合は Vercel のデプロイメント保護も検討）。
+- **`GENERATE_SECRET` あり** … 一致しない Bearer は **401**。詳細はログに出さずクライアントには汎用メッセージのみ。
+- **OpenAI / 通信エラー** … 502 応答では外部APIの生本文を**返さない**（サーバーログ `[generate]` に短く記録）。
+- **`DAILY_IMAGE_URL`** … **https のみ**。任意で `DAILY_IMAGE_ALLOWED_HOSTS` でホスト許可リスト。
+- **画像** … base64 文字列長にサーバー側上限（約 6MB 相当）で **413**。
 
 ### 仕事に落ちる文案にするために（入力の指針）
 

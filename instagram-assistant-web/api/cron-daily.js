@@ -9,6 +9,27 @@
  */
 
 async function fetchImageAsBase64(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Invalid DAILY_IMAGE_URL");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("DAILY_IMAGE_URL must use https");
+  }
+  const allowed = process.env.DAILY_IMAGE_ALLOWED_HOSTS;
+  if (allowed && String(allowed).trim()) {
+    const hosts = String(allowed)
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean);
+    const hn = parsed.hostname.toLowerCase();
+    if (!hosts.includes(hn)) {
+      throw new Error(`Image host not allowed (got ${hn}). Set DAILY_IMAGE_ALLOWED_HOSTS if intentional.`);
+    }
+  }
+
   const r = await fetch(url, { redirect: "follow" });
   if (!r.ok) {
     throw new Error(`Image fetch failed: ${r.status}`);
@@ -34,11 +55,15 @@ async function fetchImageAsBase64(url) {
 async function notifySlackSimple(text) {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (!webhookUrl) return;
-  await fetch(webhookUrl, {
+  const res = await fetch(webhookUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
   });
+  if (!res.ok) {
+    const body = await res.text();
+    console.error("[cron-daily] Slack webhook failed", res.status, body.slice(0, 400));
+  }
 }
 
 module.exports = async (req, res) => {
@@ -114,6 +139,10 @@ module.exports = async (req, res) => {
   const headers = {
     "Content-Type": "application/json",
   };
+  const genSecret = process.env.GENERATE_SECRET;
+  if (genSecret) {
+    headers.Authorization = `Bearer ${genSecret}`;
+  }
 
   let genRes;
   try {

@@ -2,11 +2,42 @@
  * Vercel Serverless: POST /api/generate
  * Body: { mode?, imageBase64?, mimeType?, audience?, workContext?, ngWords?, imageSummary?, variationHint?, notifySlack? }
  * Empty audience/workContext → optional env DEFAULT_AUDIENCE / DEFAULT_WORK_CONTEXT (Vercel).
+ * Optional env GENERATE_SECRET → require Authorization: Bearer <same> (abuse / billing protection).
  * Returns: { ok: true, data } or { error, ... }
  */
 
+const crypto = require("crypto");
+
 const VARIANTS = new Set(["empathy", "learning", "consultation"]);
+/** ~4MB binary in base64 ≈ 5.6M chars; keep margin vs client 4MB cap */
+const MAX_IMAGE_BASE64_CHARS = 6 * 1024 * 1024;
 const VARIANT_ORDER = ["empathy", "learning", "consultation"];
+
+function logGenerate(tag, payload) {
+  try {
+    const s =
+      typeof payload === "string"
+        ? payload.slice(0, 1200)
+        : JSON.stringify(payload ?? "").slice(0, 1200);
+    console.error(`[generate] ${tag}`, s);
+  } catch (_) {
+    console.error(`[generate] ${tag}`);
+  }
+}
+
+function bearerMatchesGenerateSecret(authorizationHeader, secret) {
+  if (!secret) return true;
+  const m = /^Bearer\s+(\S+)/i.exec(authorizationHeader || "");
+  const token = m ? m[1] : "";
+  const a = Buffer.from(token, "utf8");
+  const b = Buffer.from(String(secret), "utf8");
+  if (a.length !== b.length) return false;
+  try {
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
 
 function clip(text, max = 220) {
   if (!text || typeof text !== "string") return "";
@@ -469,12 +500,17 @@ module.exports = async (req, res) => {
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     return res.status(204).end();
   }
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
+  }
+
+  const generateSecret = process.env.GENERATE_SECRET;
+  if (generateSecret && !bearerMatchesGenerateSecret(req.headers.authorization, generateSecret)) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
   let body = req.body;
@@ -514,6 +550,9 @@ module.exports = async (req, res) => {
   }
   if (isAnalyze && (!imageBase64 || typeof imageBase64 !== "string")) {
     return res.status(400).json({ error: "imageBase64 (base64 string, no data: prefix) is required in analyze mode" });
+  }
+  if (isAnalyze && imageBase64.length > MAX_IMAGE_BASE64_CHARS) {
+    return res.status(413).json({ error: "Image payload too large" });
   }
   if (isRegenerate && (!imageSummary || typeof imageSummary !== "string")) {
     return res.status(400).json({ error: "imageSummary is required in regenerate mode" });
@@ -563,16 +602,19 @@ module.exports = async (req, res) => {
       temperature: 0.55,
     });
   } catch (e) {
-    return res.status(502).json({ error: "Failed to reach OpenAI", detail: String(e) });
+    logGenerate("openai_fetch_exception", String(e));
+    return res.status(502).json({ error: "Failed to reach OpenAI" });
   }
 
   if (!first.ok) {
     if (first.error === "openai_http") {
-      return res.status(502).json({ error: "OpenAI API error", detail: first.detail });
+      logGenerate("openai_http", first.detail);
+      return res.status(502).json({ error: "OpenAI API request failed" });
     }
+    logGenerate("openai_bad_response", first.detail || first.raw);
     return res.status(502).json({
-      error: first.error === "json_parse_content" ? "Model returned non-JSON text" : "Invalid response from OpenAI",
-      detail: first.detail || first.raw,
+      error:
+        first.error === "json_parse_content" ? "Model returned non-JSON text" : "Invalid response from OpenAI",
     });
   }
 
@@ -595,15 +637,17 @@ module.exports = async (req, res) => {
         temperature: 0.35,
       });
     } catch (e) {
-      return res.status(502).json({ error: "Failed to reach OpenAI on retry", detail: String(e) });
+      logGenerate("openai_retry_exception", String(e));
+      return res.status(502).json({ error: "Failed to reach OpenAI on retry" });
     }
 
     if (!second.ok) {
+      logGenerate("openai_retry_failed", second.detail || second.raw);
       return res.status(422).json({
         error: "Model output failed validation",
         details: v1.errors,
         partial: parsed,
-        retry_error: second.detail || second.raw,
+        retry_failed: true,
       });
     }
 
