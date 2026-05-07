@@ -180,6 +180,13 @@ function buildSystemPrompt() {
     "Tone: warm, trustworthy, not pushy, avoid strong claims.",
     "Goals: empathy, saves, trust, DMs — not viral tricks.",
     "",
+    "CRITICAL — include ALL top-level keys (never omit):",
+    "selected_media, alternative_media, interpretation, evaluation, idea_cards, post_variants, hashtags, stories_idea, reel_idea, self_check, image_summary",
+    "",
+    "- interpretation MUST be an object with exactly: theme (string), direction (string), reason (string). Never omit interpretation.",
+    "- stories_idea MUST be a non-empty string (Instagram Stories ideas in Japanese).",
+    "- reel_idea MUST be a non-empty string (short-form reel outline in Japanese).",
+    "",
     "Rules:",
     "- selected_media.kind is photo or video. For user-uploaded still images use kind: photo.",
     "- selected_media.url: use the literal string \"user-upload\" for the analyzed upload.",
@@ -191,6 +198,66 @@ function buildSystemPrompt() {
     "- self_check.items: array of { label: string, passed: boolean } for quality checks.",
     "- image_summary: concise Japanese summary (2-4 sentences) of the media context for cheap text-only regeneration.",
   ].join("\n");
+}
+
+async function openAiCompleteJson({
+  apiKey,
+  systemPrompt,
+  isAnalyze,
+  userText,
+  dataUrl,
+  temperature = 0.55,
+}) {
+  const userContent = isAnalyze
+    ? [
+        { type: "text", text: userText },
+        { type: "image_url", image_url: { url: dataUrl } },
+      ]
+    : [{ type: "text", text: userText }];
+
+  const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: userContent,
+        },
+      ],
+    }),
+  });
+
+  const rawText = await openaiRes.text();
+  if (!openaiRes.ok) {
+    return { ok: false, error: "openai_http", detail: rawText, status: openaiRes.status };
+  }
+
+  let data;
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    return { ok: false, error: "openai_parse_meta", detail: rawText };
+  }
+
+  const content = data.choices?.[0]?.message?.content;
+  if (!content || typeof content !== "string") {
+    return { ok: false, error: "empty_content", detail: data };
+  }
+
+  try {
+    const parsed = JSON.parse(content);
+    return { ok: true, parsed, rawContent: content };
+  } catch {
+    return { ok: false, error: "json_parse_content", raw: content.slice(0, 2000) };
+  }
 }
 
 function buildImageSummaryFallback(parsed) {
@@ -365,57 +432,61 @@ module.exports = async (req, res) => {
   if (useDummy) {
     parsed = buildDummyOutput({ mode, imageSummary, audience, variationHint });
   } else {
-    let openaiRes;
+    let first;
     try {
-      openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          temperature: 0.55,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            {
-              role: "user",
-              content: isAnalyze
-                ? [
-                    { type: "text", text: userText },
-                    { type: "image_url", image_url: { url: dataUrl } },
-                  ]
-                : [{ type: "text", text: userText }],
-            },
-          ],
-        }),
+      first = await openAiCompleteJson({
+        apiKey,
+        systemPrompt,
+        isAnalyze,
+        userText,
+        dataUrl,
+        temperature: 0.55,
       });
     } catch (e) {
       return res.status(502).json({ error: "Failed to reach OpenAI", detail: String(e) });
     }
 
-    const rawText = await openaiRes.text();
-    if (!openaiRes.ok) {
-      return res.status(502).json({ error: "OpenAI API error", detail: rawText });
+    if (!first.ok) {
+      if (first.error === "openai_http") {
+        return res.status(502).json({ error: "OpenAI API error", detail: first.detail });
+      }
+      return res.status(502).json({
+        error: first.error === "json_parse_content" ? "Model returned non-JSON text" : "Invalid response from OpenAI",
+        detail: first.detail || first.raw,
+      });
     }
 
-    let data;
-    try {
-      data = JSON.parse(rawText);
-    } catch {
-      return res.status(502).json({ error: "Invalid response from OpenAI" });
-    }
+    parsed = first.parsed;
+    let v1 = validateOutput(parsed);
 
-    const content = data.choices?.[0]?.message?.content;
-    if (!content || typeof content !== "string") {
-      return res.status(502).json({ error: "Empty model output", detail: data });
-    }
+    if (!v1.ok) {
+      const repairSystem = `${buildSystemPrompt()}\n\nREPAIR: Previous output was rejected. Output ONE complete JSON object. Do not omit interpretation, stories_idea, reel_idea, or any top-level key.`;
+      const repairUser = `${userText}\n\nValidation errors: ${v1.errors.join("; ")}.\nReturn the full JSON again with every required field.`;
 
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      return res.status(502).json({ error: "Model returned non-JSON text", raw: content.slice(0, 2000) });
+      let second;
+      try {
+        second = await openAiCompleteJson({
+          apiKey,
+          systemPrompt: repairSystem,
+          isAnalyze,
+          userText: repairUser,
+          dataUrl,
+          temperature: 0.35,
+        });
+      } catch (e) {
+        return res.status(502).json({ error: "Failed to reach OpenAI on retry", detail: String(e) });
+      }
+
+      if (!second.ok) {
+        return res.status(422).json({
+          error: "Model output failed validation",
+          details: v1.errors,
+          partial: parsed,
+          retry_error: second.detail || second.raw,
+        });
+      }
+
+      parsed = second.parsed;
     }
   }
 
