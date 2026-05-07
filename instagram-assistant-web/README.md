@@ -22,6 +22,7 @@
 - `OPENAI_API_KEY` (必須)
 - `SLACK_WEBHOOK_URL` (Slack通知を使う場合は必須)
 - `ACCESS_CODE` (任意: APIを簡易保護)
+- `DUMMY_MODE` (任意: `true` でOpenAIを呼ばずダミーJSONを返す。課金前の画面確認用)
 
 ## 4. ローカル起動
 

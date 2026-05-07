@@ -199,6 +199,82 @@ function buildImageSummaryFallback(parsed) {
   return lines.join(" ").slice(0, 500);
 }
 
+function buildDummyOutput({ mode, imageSummary, audience, variationHint }) {
+  const isRegenerate = mode === "regenerate";
+  const summary =
+    (isRegenerate && imageSummary) ||
+    "朝のデスクでコーヒーを置いた静かな日常シーン。整え直す・深呼吸・小さく始める文脈が合う。";
+  const audienceText = audience ? `（対象: ${audience}）` : "";
+  const variationText = variationHint ? ` 再生成ヒント: ${variationHint}` : "";
+
+  return {
+    selected_media: {
+      kind: "photo",
+      url: "user-upload",
+      alt_text: "朝のデスクとコーヒー",
+      selection_summary: `ダミーモードのため固定サンプルを返しています${audienceText}。`,
+    },
+    alternative_media: [
+      { kind: "photo", url: "placeholder", label: "手元アップ" },
+      { kind: "photo", url: "placeholder", label: "机全体の引き" },
+      { kind: "photo", url: "placeholder", label: "光のある窓際" },
+    ],
+    interpretation: {
+      theme: "忙しい朝でも自分のペースを取り戻す",
+      direction: "共感→気づき→やさしい締め",
+      reason: `落ち着いた日常感が信頼導線に向く。${variationText}`.trim(),
+    },
+    evaluation: {
+      empathy: 4,
+      save: 4,
+      comment: 3,
+      lead: 4,
+      brand_fit: 5,
+      scale_max: 5,
+      note: "ダミーモードの仮評価（信頼重視）",
+    },
+    idea_cards: [
+      { text: "完璧より継続。1分で始める行動は保存されやすい。" },
+      { text: "キャプション1行目は共感、2行目で気づきを入れる。" },
+      { text: "相談導線は『一緒に整理』の言い回しが安心される。" },
+    ],
+    post_variants: [
+      {
+        variant: "empathy",
+        goal: "保存",
+        hook: "朝が重い日があっても大丈夫",
+        caption:
+          "今日はうまく始められない朝だった。\n\nそれでも、コーヒーを一口飲んで深呼吸したら少し戻れた。\n\n完璧じゃなくても、始めた自分を認めたい。",
+      },
+      {
+        variant: "learning",
+        goal: "フォロー",
+        hook: "意志力より環境の工夫",
+        caption:
+          "集中が切れる日は、意志ではなく視界の情報量を減らす。\n\n机には『今やる1枚』だけ置く。\n\nこれだけで、迷いが減って進みやすくなる。",
+      },
+      {
+        variant: "consultation",
+        goal: "DM",
+        hook: "忙しいのに進んでいない感覚",
+        caption:
+          "タスクは多いのに進まないとき、優先順位が言葉になっていないことが多いです。\n\nよければDMで、いま一番詰まっていることを1つだけ教えてください。\n一緒に3つまで整理します。",
+      },
+    ],
+    hashtags: ["#仕事と暮らし", "#朝の習慣", "#自分のペース", "#相談歓迎"],
+    stories_idea: "朝の1分ルーティンを質問スタンプ付きで共有。",
+    reel_idea: "0-3秒で共感テロップ、4-12秒で小さな行動、最後にやさしい導線。",
+    self_check: {
+      items: [
+        { label: "売り込みが強すぎない", passed: true },
+        { label: "断定しすぎていない", passed: true },
+        { label: "共感→気づき→やさしい締め", passed: true },
+      ],
+    },
+    image_summary: summary,
+  };
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
 
@@ -221,11 +297,6 @@ module.exports = async (req, res) => {
     }
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: "OPENAI_API_KEY is not configured on the server" });
-  }
-
   let body = req.body;
   if (typeof body === "string") {
     try {
@@ -246,6 +317,18 @@ module.exports = async (req, res) => {
     notifySlack = false,
     clientDateLabel = "",
   } = body || {};
+
+  const dummyEnabledByEnv = ["1", "true", "yes", "on"].includes(
+    String(process.env.DUMMY_MODE || "").toLowerCase()
+  );
+  const useDummy = dummyEnabledByEnv || body?.useDummy === true;
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey && !useDummy) {
+    return res.status(500).json({
+      error: "OPENAI_API_KEY is not configured on the server (or enable DUMMY_MODE=true for UI testing)",
+    });
+  }
   const isRegenerate = mode === "regenerate";
   const isAnalyze = mode === "analyze";
   if (!isAnalyze && !isRegenerate) {
@@ -274,58 +357,62 @@ module.exports = async (req, res) => {
     .filter(Boolean)
     .join("\n");
 
-  let openaiRes;
-  try {
-    openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.55,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: isAnalyze
-              ? [
-                  { type: "text", text: userText },
-                  { type: "image_url", image_url: { url: dataUrl } },
-                ]
-              : [{ type: "text", text: userText }],
-          },
-        ],
-      }),
-    });
-  } catch (e) {
-    return res.status(502).json({ error: "Failed to reach OpenAI", detail: String(e) });
-  }
-
-  const rawText = await openaiRes.text();
-  if (!openaiRes.ok) {
-    return res.status(502).json({ error: "OpenAI API error", detail: rawText });
-  }
-
-  let data;
-  try {
-    data = JSON.parse(rawText);
-  } catch {
-    return res.status(502).json({ error: "Invalid response from OpenAI" });
-  }
-
-  const content = data.choices?.[0]?.message?.content;
-  if (!content || typeof content !== "string") {
-    return res.status(502).json({ error: "Empty model output", detail: data });
-  }
-
   let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    return res.status(502).json({ error: "Model returned non-JSON text", raw: content.slice(0, 2000) });
+  if (useDummy) {
+    parsed = buildDummyOutput({ mode, imageSummary, audience, variationHint });
+  } else {
+    let openaiRes;
+    try {
+      openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          temperature: 0.55,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: systemPrompt },
+            {
+              role: "user",
+              content: isAnalyze
+                ? [
+                    { type: "text", text: userText },
+                    { type: "image_url", image_url: { url: dataUrl } },
+                  ]
+                : [{ type: "text", text: userText }],
+            },
+          ],
+        }),
+      });
+    } catch (e) {
+      return res.status(502).json({ error: "Failed to reach OpenAI", detail: String(e) });
+    }
+
+    const rawText = await openaiRes.text();
+    if (!openaiRes.ok) {
+      return res.status(502).json({ error: "OpenAI API error", detail: rawText });
+    }
+
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      return res.status(502).json({ error: "Invalid response from OpenAI" });
+    }
+
+    const content = data.choices?.[0]?.message?.content;
+    if (!content || typeof content !== "string") {
+      return res.status(502).json({ error: "Empty model output", detail: data });
+    }
+
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return res.status(502).json({ error: "Model returned non-JSON text", raw: content.slice(0, 2000) });
+    }
   }
 
   const check = validateOutput(parsed);
@@ -368,6 +455,7 @@ module.exports = async (req, res) => {
     meta: {
       mode,
       image_summary: parsed.image_summary,
+      source: useDummy ? "dummy" : "openai",
     },
   });
 };
