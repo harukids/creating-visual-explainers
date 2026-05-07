@@ -173,6 +173,53 @@ function validateOutput(obj) {
   return errors.length ? { ok: false, errors } : { ok: true };
 }
 
+/** Coerce common model slips before validateOutput (scale_max, selection_summary, note, score types). */
+function normalizeInstagramPayload(obj) {
+  if (!obj || typeof obj !== "object") return obj;
+
+  if (!obj.selected_media || typeof obj.selected_media !== "object") {
+    obj.selected_media = { kind: "photo", url: "user-upload", selection_summary: "" };
+  }
+  const sm = obj.selected_media;
+  if (!["photo", "video"].includes(sm.kind)) sm.kind = "photo";
+  if (typeof sm.url !== "string") sm.url = "user-upload";
+  if (typeof sm.selection_summary !== "string" || !String(sm.selection_summary).trim()) {
+    const theme = obj.interpretation?.theme;
+    const dir = obj.interpretation?.direction;
+    const base =
+      typeof theme === "string" && theme.trim()
+        ? theme.trim()
+        : typeof dir === "string" && dir.trim()
+          ? dir.trim()
+          : "";
+    sm.selection_summary =
+      base.slice(0, 400) || "発信に適したメディアとして選定（ユーザー投稿）。";
+  }
+
+  if (!obj.evaluation || typeof obj.evaluation !== "object") {
+    obj.evaluation = {};
+  }
+  const ev = obj.evaluation;
+  ev.scale_max = 5;
+  if (typeof ev.note !== "string" || !String(ev.note).trim()) {
+    ev.note =
+      "共感・保存・コメント・導線・ブランド整合を1〜5で評価。信頼重視の観点です。";
+  }
+  ["empathy", "save", "comment", "lead", "brand_fit"].forEach((k) => {
+    let n = ev[k];
+    if (typeof n === "string" && n.trim() !== "" && !Number.isNaN(Number(n))) {
+      n = Number(n);
+    }
+    if (typeof n !== "number" || Number.isNaN(n)) {
+      ev[k] = 3;
+    } else {
+      ev[k] = Math.max(1, Math.min(5, Math.round(n)));
+    }
+  });
+
+  return obj;
+}
+
 function buildSystemPrompt() {
   return [
     "You output a single JSON object only (no markdown, no code fences).",
@@ -190,8 +237,9 @@ function buildSystemPrompt() {
     "Rules:",
     "- selected_media.kind is photo or video. For user-uploaded still images use kind: photo.",
     "- selected_media.url: use the literal string \"user-upload\" for the analyzed upload.",
+    "- selected_media.selection_summary: REQUIRED non-empty string (Japanese): why this photo/video fits the post.",
     "- alternative_media: max 3 items. If only one image exists, use [] or up to 3 placeholder entries with kind photo, url \"placeholder\", label describing a different crop/angle conceptually.",
-    "- evaluation: integers 1-5 for empathy, save, comment, lead, brand_fit. scale_max is always 5. note explains trust-first scoring.",
+    "- evaluation: integers 1-5 for empathy, save, comment, lead, brand_fit. MUST set scale_max to the number 5 (not 10). MUST include note as a string (trust-first scoring explanation).",
     "- idea_cards: 3 or 4 items, each { title?: string, text: string }.",
     "- post_variants: exactly 3 objects with variant empathy, learning, consultation (each once). caption may use \\n for line breaks.",
     "- hashtags: array of strings, may include #.",
@@ -457,6 +505,7 @@ module.exports = async (req, res) => {
     }
 
     parsed = first.parsed;
+    normalizeInstagramPayload(parsed);
     let v1 = validateOutput(parsed);
 
     if (!v1.ok) {
@@ -487,9 +536,11 @@ module.exports = async (req, res) => {
       }
 
       parsed = second.parsed;
+      normalizeInstagramPayload(parsed);
     }
   }
 
+  normalizeInstagramPayload(parsed);
   const check = validateOutput(parsed);
   if (!check.ok) {
     return res.status(422).json({
