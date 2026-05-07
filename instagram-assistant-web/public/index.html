@@ -104,6 +104,12 @@
     .hashtag { display: inline-block; font-size: 12px; color: var(--accent); background: var(--pink-soft); padding: 6px 12px; border-radius: 999px; margin: 0 6px 6px 0; }
     .idea-block { padding: 14px; background: var(--beige); border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 10px; }
     .idea-block h4 { margin: 0 0 8px; font-size: 12px; color: var(--accent); }
+    .source-strip {
+      background: var(--pink-soft);
+      border: 1px dashed rgba(196, 139, 148, 0.55);
+    }
+    .source-strip-text { margin: 0; font-size: 13px; line-height: 1.5; }
+    .source-strip-text strong { color: var(--accent); }
   </style>
 </head>
 <body>
@@ -305,7 +311,7 @@
           okEl.classList.remove("hidden");
         }
 
-        render(json.data);
+        render(json.data, json.meta);
         resultEl.classList.remove("hidden");
         resultEl.scrollIntoView({ behavior: "smooth", block: "start" });
       } catch (e) {
@@ -342,7 +348,7 @@
         okEl.textContent = status;
         okEl.classList.remove("hidden");
 
-        render(json.data);
+        render(json.data, json.meta);
         resultEl.classList.remove("hidden");
         resultEl.scrollIntoView({ behavior: "smooth", block: "start" });
       } catch (e) {
@@ -353,7 +359,15 @@
       }
     });
 
-    function render(d) {
+    function render(d, meta) {
+      meta = meta || {};
+      const sourceLabel =
+        meta.source === "dummy"
+          ? "ダミーモード（Vercel の環境変数 DUMMY_MODE が有効なときだけ）"
+          : meta.source === "openai"
+            ? "OpenAI API（本番の生成）"
+            : String(meta.source || "—");
+
       const sm = d.selected_media;
       const interp = d.interpretation;
       const ev = d.evaluation;
@@ -363,6 +377,8 @@
       });
 
       let html = "";
+
+      html += `<section class="card source-strip"><p class="source-strip-text"><strong>出力元：</strong>${escapeHtml(sourceLabel)}</p></section>`;
 
       html += `<section class="card"><h2 class="card-title">選ばれたメディア</h2>`;
       html += `<p style="font-size:13px;color:var(--text-muted)">${escapeHtml(sm.selection_summary)}</p></section>`;

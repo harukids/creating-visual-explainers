@@ -322,9 +322,8 @@ module.exports = async (req, res) => {
     notifySlack = false,
   } = body || {};
 
-  const dummyEnabledByEnv = ["1", "true", "yes", "on"].includes(
-    String(process.env.DUMMY_MODE || "").toLowerCase()
-  );
+  const dummyEnvRaw = String(process.env.DUMMY_MODE || "").trim().toLowerCase();
+  const dummyEnabledByEnv = ["1", "true", "yes", "on"].includes(dummyEnvRaw);
   /** クライアントの body.useDummy は無視（本番でダミーにすり替えられないようにする） */
   const useDummy = dummyEnabledByEnv;
 
