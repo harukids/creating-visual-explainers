@@ -66,6 +66,7 @@ module.exports = async (req, res) => {
   const dailyUrl = (process.env.DAILY_IMAGE_URL || "").trim();
   const dailySummary = (process.env.DAILY_IMAGE_SUMMARY || "").trim();
   const audience = process.env.CRON_AUDIENCE || "";
+  const workContext = process.env.CRON_WORK_CONTEXT || "";
   const ngWords = process.env.CRON_NG_WORDS || "";
   const variationHint = process.env.CRON_VARIATION_HINT || "";
 
@@ -89,6 +90,7 @@ module.exports = async (req, res) => {
         imageBase64: img.imageBase64,
         mimeType: img.mimeType,
         audience,
+        workContext,
         ngWords,
         variationHint,
         notifySlack: true,
@@ -98,6 +100,7 @@ module.exports = async (req, res) => {
         mode: "regenerate",
         imageSummary: dailySummary,
         audience,
+        workContext,
         ngWords,
         variationHint,
         notifySlack: true,

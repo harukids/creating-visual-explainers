@@ -1,6 +1,6 @@
 /**
  * Vercel Serverless: POST /api/generate
- * Body: { mode?, imageBase64?, mimeType?, audience?, ngWords?, imageSummary?, variationHint?, notifySlack? }
+ * Body: { mode?, imageBase64?, mimeType?, audience?, workContext?, ngWords?, imageSummary?, variationHint?, notifySlack? }
  * Returns: { ok: true, data } or { error, ... }
  */
 
@@ -319,12 +319,51 @@ function normalizeInstagramPayload(obj) {
   return obj;
 }
 
+/**
+ * アカウントのブランド前提（Vercel の BRAND_GUIDELINES で全文置換可能）。
+ * 未設定時はこの既定を使用する。
+ */
+const DEFAULT_BRAND_GUIDELINES = [
+  "あなたはInstagramブランド設計のプロとして、このアカウント向けに次を前提に文案・構成・トーンを作ること。",
+  "",
+  "■ 世界観・テーマ",
+  "美容・健康・AI活用・ライフデザイン。「自分らしく整って生きる」を軸に発信している。",
+  "",
+  "■ 発信者の横断的な強み（必要に応じて自然に織り込む）",
+  "MC/司会業、美容健康分野の知識、予防医療視点、Nu Skinビジネス、AI活用。",
+  "",
+  "■ 目的（単なる情報発信で終わらせない）",
+  "世界観への共感、信頼構築、「この人素敵」と感じてもらうこと、将来的な集客、価値観の合う仲間の形成。",
+  "",
+  "■ 禁止トーン・禁止構造",
+  "煽り、説教、過度な不安訴求、情報商材っぽさ、強いMLM感、押し売り感、キラキラ起業女子感、安っぽいバズ狙い。",
+  "",
+  "■ 質感（優先）",
+  "上品、知的、柔らかい、人間味、余韻、共感。「正論」より「気づき」を届ける投稿を優先する。",
+  "",
+  "■ 導線",
+  "保存・共感されやすい、自然な感情の流れを設計する。",
+].join("\n");
+
+function appendBrandGuidelinesBlock() {
+  const fromEnv = process.env.BRAND_GUIDELINES;
+  const text =
+    typeof fromEnv === "string" && fromEnv.trim()
+      ? fromEnv.trim()
+      : DEFAULT_BRAND_GUIDELINES;
+  return `\n\n--- Instagram brand (always apply) ---\n${text}`;
+}
+
 function buildSystemPrompt() {
   return [
     "You output a single JSON object only (no markdown, no code fences).",
     "Language: Japanese for all user-facing strings.",
     "Tone: warm, trustworthy, not pushy, avoid strong claims.",
     "Goals: empathy, saves, trust, DMs — not viral tricks.",
+    "",
+    "Depth (when user gives business/work context):",
+    "- Anchor hooks, captions, idea_cards, stories_idea, and reel_idea to that context: reader situation, your role/service, and one concrete takeaway they can use — avoid vague self-help filler unrelated to their work.",
+    "- interpretation.reason should state briefly how this post supports their professional or business intent.",
     "",
     "CRITICAL — include ALL top-level keys (never omit):",
     "selected_media, alternative_media, interpretation, evaluation, idea_cards, post_variants, hashtags, stories_idea, reel_idea, self_check, image_summary",
@@ -344,7 +383,7 @@ function buildSystemPrompt() {
     "- hashtags: array of strings, may include #.",
     "- self_check.items: array of { label: string, passed: boolean } for quality checks.",
     "- image_summary: concise Japanese summary (2-4 sentences) of the media context for cheap text-only regeneration.",
-  ].join("\n");
+  ].join("\n") + appendBrandGuidelinesBlock();
 }
 
 async function openAiCompleteJson({
@@ -445,12 +484,15 @@ module.exports = async (req, res) => {
     imageBase64,
     mimeType = "image/jpeg",
     audience = "",
+    workContext: workContextRaw = "",
     ngWords = "",
     mode = "analyze",
     imageSummary = "",
     variationHint = "",
     notifySlack = false,
   } = body || {};
+
+  const workContext = typeof workContextRaw === "string" ? workContextRaw : "";
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -473,11 +515,20 @@ module.exports = async (req, res) => {
   const dataUrl = isAnalyze ? `data:${mimeType};base64,${imageBase64}` : "";
 
   const systemPrompt = buildSystemPrompt();
+  const trimmedWork = workContext.trim();
+  const wc =
+    trimmedWork ||
+    (typeof process.env.DEFAULT_WORK_CONTEXT === "string"
+      ? process.env.DEFAULT_WORK_CONTEXT.trim()
+      : "");
   const userText = [
     isAnalyze
       ? "Analyze this image for Instagram post ideas."
       : "Regenerate Instagram post ideas from the given image_summary only (do not assume new visuals).",
     audience ? `Target / brand context: ${audience}` : "",
+    wc
+      ? `Business & intent (ALL copy must reflect this — be specific, not generic): ${wc}`
+      : "",
     ngWords ? `Avoid or be careful with: ${ngWords}` : "",
     isRegenerate ? `image_summary: ${imageSummary}` : "",
     variationHint ? `Variation request: ${variationHint}` : "",

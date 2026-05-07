@@ -128,6 +128,9 @@
       <label for="audience">発信の文脈（任意）</label>
       <textarea id="audience" placeholder="例：子育てママ向けコーチ / デザイナーとしての日常 など"></textarea>
 
+      <label for="workContext">仕事・サービス・この投稿で達成したいこと（推奨）</label>
+      <textarea id="workContext" placeholder="例：◯◯の個別相談につなげたい / 既存客に「また頼みたい」と思ってもらう / 〇業界の若手向けに実務Tipsを出したい — 誰に・何のために投稿するかを具体的に"></textarea>
+
       <label for="ng">避けたい表現・NG（任意）</label>
       <input type="text" id="ng" placeholder="例：煽り・断定的な医療表現 など" />
 
@@ -180,6 +183,7 @@
     function getCommonPayload() {
       return {
         audience: document.getElementById("audience").value.trim(),
+        workContext: document.getElementById("workContext").value.trim(),
         ngWords: document.getElementById("ng").value.trim(),
         variationHint: document.getElementById("variationHint").value.trim(),
         notifySlack: document.getElementById("notifySlack").checked,
