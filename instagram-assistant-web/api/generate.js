@@ -130,7 +130,8 @@ function buildSlackPreviewUrl(result, { requestHost } = {}) {
   if (!host) return { url: "", reason: "host_unresolved" };
   const appUrl = `https://${host}/`;
 
-  const maxUrlLen = 3800;
+  // Keep URL short enough so Slack text clipping never breaks link markup.
+  const maxUrlLen = 1800;
   const trials = [
     { cap: null, compact: false },
     { cap: 3500, compact: false },
@@ -187,7 +188,7 @@ function buildSlackMessage(result, { requestHost } = {}) {
     "_詳細文面はリンク先で確認してください_",
   ];
   return {
-    text: clip(lines.join("\n"), 3000),
+    text: clip(lines.join("\n"), 6000),
     preview: {
       url: previewUrl,
       reason: previewReason,
