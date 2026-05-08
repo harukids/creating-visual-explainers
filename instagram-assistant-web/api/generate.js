@@ -14,6 +14,12 @@ const VARIANTS = new Set(["empathy", "learning", "consultation"]);
 const MAX_IMAGE_BASE64_CHARS = 6 * 1024 * 1024;
 const VARIANT_ORDER = ["empathy", "learning", "consultation"];
 
+/** Instagram本文で避けたい「アップロードそのもの」を指すメタな言い回し（部分一致）。 selection_summary は対象外。 */
+const FORBIDDEN_PHOTO_META_FRAGMENTS = ["この写真は", "この一枚は", "この画像は", "このカットは"];
+
+/** 「写真では〜」形式のメタ書き出し（文頭・改行直後のみ検出し、文中の「〜写真では〜」は除外） */
+const PHOTO_DEWA_OPENING = /(^|[\n\r])\s*写真では/g;
+
 function logGenerate(tag, payload) {
   try {
     const s =
@@ -322,6 +328,64 @@ function validateOutput(obj) {
   return errors.length ? { ok: false, errors } : { ok: true };
 }
 
+function containsForbiddenPhotoMeta(text) {
+  if (!text || typeof text !== "string") return false;
+  if (FORBIDDEN_PHOTO_META_FRAGMENTS.some((frag) => text.includes(frag))) return true;
+  PHOTO_DEWA_OPENING.lastIndex = 0;
+  return PHOTO_DEWA_OPENING.test(text);
+}
+
+/**
+ * 投稿文案・フック等に禁止フレーズが混ざっていないか検査。
+ * selected_media.selection_summary は「選定理由」としてメタ表現を許容するため検査しない。
+ */
+function validatePhotoMetaCopy(obj) {
+  const errors = [];
+  if (!obj || typeof obj !== "object") return { ok: true, errors: [] };
+
+  const interp = obj.interpretation;
+  if (interp && typeof interp === "object") {
+    ["theme", "direction", "reason"].forEach((k) => {
+      const t = interp[k];
+      if (typeof t === "string" && containsForbiddenPhotoMeta(t)) {
+        errors.push(`copy_guard: interpretation.${k} contains forbidden photo-meta phrase`);
+      }
+    });
+  }
+
+  const posts = Array.isArray(obj.post_variants) ? obj.post_variants : [];
+  posts.forEach((p, i) => {
+    if (!p || typeof p !== "object") return;
+    ["goal", "hook", "caption"].forEach((f) => {
+      const t = p[f];
+      if (typeof t === "string" && containsForbiddenPhotoMeta(t)) {
+        errors.push(`copy_guard: post_variants[${i}].${f} contains forbidden photo-meta phrase`);
+      }
+    });
+  });
+
+  const cards = Array.isArray(obj.idea_cards) ? obj.idea_cards : [];
+  cards.forEach((c, i) => {
+    const t = c?.text;
+    if (typeof t === "string" && containsForbiddenPhotoMeta(t)) {
+      errors.push(`copy_guard: idea_cards[${i}].text contains forbidden photo-meta phrase`);
+    }
+  });
+
+  if (typeof obj.stories_idea === "string" && containsForbiddenPhotoMeta(obj.stories_idea)) {
+    errors.push("copy_guard: stories_idea contains forbidden photo-meta phrase");
+  }
+  if (typeof obj.reel_idea === "string" && containsForbiddenPhotoMeta(obj.reel_idea)) {
+    errors.push("copy_guard: reel_idea contains forbidden photo-meta phrase");
+  }
+
+  if (typeof obj.image_summary === "string" && containsForbiddenPhotoMeta(obj.image_summary)) {
+    errors.push("copy_guard: image_summary contains forbidden photo-meta phrase");
+  }
+
+  return errors.length ? { ok: false, errors } : { ok: true, errors: [] };
+}
+
 function resolvePostVariantKey(v) {
   if (typeof v !== "string") return null;
   const s = v.trim();
@@ -357,7 +421,7 @@ function normalizePostVariants(obj) {
     empathy: {
       goal: "読者の気持ちに寄り添う",
       hook: "まず共感の一言",
-      caption: `${baseCaption}について、いまの気持ちにそっと寄り添う一文から始めます。\n\n写真のような瞬間は、誰にでもあるけれど言葉にしにくいことが多いです。だからこそ、整え直すきっかけを、やさしく共有したいです。\n\n（※モデル出力が短かった場合の補完文案です。再生成で長めの案を出してください。）`,
+      caption: `${baseCaption}について、いまの気持ちにそっと寄り添う一文から始めます。\n\nそんな瞬間は、誰にでもあるけれど言葉にしにくいことが多いです。だからこそ、整え直すきっかけを、やさしく共有したいです。\n\n（※モデル出力が短かった場合の補完文案です。再生成で長めの案を出してください。）`,
     },
     learning: {
       goal: "小さな学び・視点を渡す",
@@ -514,8 +578,10 @@ function buildSystemPrompt() {
     "Goals: empathy, saves, trust, DMs — not viral tricks.",
     "",
     "Japanese wording — avoid clichéd meta openings about the upload:",
-    "- Do NOT start hooks or captions (post_variants) with phrases like 「この写真は」「この一枚は」「写真では」unless unavoidable; prefer scene, feeling, or reader-directed openings.",
-    "- Apply the same habit to idea_cards text, stories_idea, and reel_idea. selection_summary may briefly explain choice but avoid starting with 「この写真は」.",
+    "- CRITICAL: Do NOT include these substrings ANYWHERE in user-facing copy: 「この写真は」「この一枚は」「この画像は」「このカットは」.",
+    "- Also do NOT begin any sentence or paragraph with 「写真では…」（メタな書き出し）。They must not appear in hooks, captions, goal, interpretation.theme/direction/reason, idea_cards.text, stories_idea, reel_idea, or image_summary. Rewrite entirely if needed.",
+    "- Prefer scene, feeling, or reader-directed openings; never point at the upload as 「この写真」.",
+    "- selected_media.selection_summary is the ONLY field where brief meta about media choice is allowed; even there, do NOT start with 「この写真は」.",
     "",
     "Depth (when user gives business/work context):",
     "- Anchor hooks, captions, idea_cards, stories_idea, and reel_idea to that context: reader situation, your role/service, and one concrete takeaway they can use — avoid vague self-help filler unrelated to their work.",
@@ -711,6 +777,7 @@ module.exports = async (req, res) => {
     isRegenerate ? `image_summary: ${imageSummary}` : "",
     variationHint ? `Variation request: ${variationHint}` : "",
     "post_variants.caption: write full-length Japanese captions per system instructions (~400–900 characters each, multiple paragraphs with blank lines). Do not output one-line or token-short captions.",
+    "Copy guard: never output 「この写真は」「この一枚は」「この画像は」「このカットは」; never open a sentence/paragraph with 「写真では」 in Instagram-facing string fields.",
     "Fill every required field in the JSON schema described in system instructions.",
   ]
     .filter(Boolean)
@@ -747,10 +814,13 @@ module.exports = async (req, res) => {
   parsed = first.parsed;
   normalizeInstagramPayload(parsed);
   let v1 = validateOutput(parsed);
+  let cg1 = validatePhotoMetaCopy(parsed);
 
-  if (!v1.ok) {
-    const repairSystem = `${buildSystemPrompt()}\n\nREPAIR: Previous output was rejected. Output ONE complete JSON object. Do not omit interpretation, stories_idea, reel_idea, or any top-level key. post_variants must be exactly 3 objects with variant literally empathy, learning, consultation (English), each with goal, hook, caption strings. Each caption must stay substantive (~400+ Japanese characters, multiple paragraphs with blank lines) per system rules.`;
-    const repairUser = `${userText}\n\nValidation errors: ${v1.errors.join("; ")}.\nReturn the full JSON again with every required field.`;
+  if (!v1.ok || !cg1.ok) {
+    const schemaErr = v1.ok ? [] : v1.errors;
+    const copyErr = cg1.ok ? [] : cg1.errors;
+    const repairSystem = `${buildSystemPrompt()}\n\nREPAIR: Previous output was rejected. Output ONE complete JSON object. Do not omit interpretation, stories_idea, reel_idea, or any top-level key. post_variants must be exactly 3 objects with variant literally empathy, learning, consultation (English), each with goal, hook, caption strings. Each caption must stay substantive (~400+ Japanese characters, multiple paragraphs with blank lines) per system rules.\n\nCOPY GUARD (mandatory): Remove every occurrence of: 「この写真は」「この一枚は」「この画像は」「このカットは」 from hooks, captions, interpretation fields, idea_cards, stories_idea, reel_idea, image_summary. Do not begin any sentence or paragraph with 「写真では」. Rewrite sentences without referring to the upload as 「この写真」. Keep selection_summary as media rationale but do not start it with 「この写真は」.`;
+    const repairUser = `${userText}\n\nValidation errors (schema): ${schemaErr.join("; ") || "(none)"}.\nValidation errors (copy guard): ${copyErr.join("; ") || "(none)"}.\nReturn the full JSON again with every required field and zero forbidden substrings in Instagram-facing strings.`;
 
     let second;
     try {
@@ -771,7 +841,7 @@ module.exports = async (req, res) => {
       logGenerate("openai_retry_failed", second.detail || second.raw);
       return res.status(422).json({
         error: "Model output failed validation",
-        details: v1.errors,
+        details: [...schemaErr, ...copyErr],
         partial: parsed,
         retry_failed: true,
       });
@@ -783,10 +853,11 @@ module.exports = async (req, res) => {
 
   normalizeInstagramPayload(parsed);
   const check = validateOutput(parsed);
-  if (!check.ok) {
+  const cgFinal = validatePhotoMetaCopy(parsed);
+  if (!check.ok || !cgFinal.ok) {
     return res.status(422).json({
       error: "Model output failed validation",
-      details: check.errors,
+      details: [...(check.ok ? [] : check.errors), ...(cgFinal.ok ? [] : cgFinal.errors)],
       partial: parsed,
     });
   }
