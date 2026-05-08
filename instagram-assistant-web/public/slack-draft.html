@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>投稿案プレビュー · Instagram アシスタント</title>
+  <style>
+    :root {
+      --bg: #faf8f5;
+      --surface: #ffffff;
+      --beige: #f3ebe3;
+      --text: #3d3538;
+      --text-muted: #7a6e72;
+      --accent: #c48b94;
+      --pink-soft: #f5e6e8;
+      --radius: 14px;
+      --shadow: 0 8px 28px rgba(61, 53, 56, 0.08);
+      --max: 560px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+      background: linear-gradient(180deg, var(--bg) 0%, var(--beige) 100%);
+      color: var(--text);
+      line-height: 1.65;
+      padding: 24px 16px 48px;
+    }
+    .wrap { max-width: var(--max); margin: 0 auto; }
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      background: var(--pink-soft);
+      padding: 6px 12px;
+      border-radius: 999px;
+      margin-bottom: 12px;
+    }
+    h1 { font-size: 1.2rem; font-weight: 600; margin: 0 0 16px; }
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 18px;
+      margin-bottom: 14px;
+    }
+    .theme { font-size: 1.05rem; font-weight: 600; margin: 0 0 8px; }
+    .muted { color: var(--text-muted); font-size: 13px; margin: 0 0 12px; }
+    .eval {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    .variant-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      margin: 0 0 6px;
+    }
+    .hook { font-size: 13px; color: var(--text-muted); margin: 0 0 8px; }
+    .caption {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 15px;
+      margin: 0;
+      padding: 12px;
+      background: var(--pink-soft);
+      border-radius: 10px;
+      border-left: 4px solid var(--accent);
+    }
+    .tags { font-size: 14px; margin-top: 8px; }
+    .extra { font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+    .err {
+      background: #fff5f5;
+      border: 1px solid #e8c4c8;
+      color: #6b3a40;
+      padding: 16px;
+      border-radius: var(--radius);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="badge">Slack から開いた整形プレビュー</div>
+    <h1>今日の投稿案</h1>
+    <div id="root"></div>
+  </div>
+  <script>
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function showError(msg) {
+      document.getElementById("root").innerHTML =
+        '<div class="err"><strong>表示できませんでした</strong><p>' +
+        escapeHtml(msg) +
+        "</p><p class=\"muted\" style=\"margin-top:12px\">Slack のリンクから開き直すか、インスタアシスタントの画面で再生成してください。</p></div>";
+    }
+
+    async function decodeHash(hash) {
+      if (!hash || hash.length < 8) {
+        throw new Error("リンクにデータがありません（# 以降が欠けている可能性があります）。");
+      }
+      let b64 = hash.replace(/^#/, "").replace(/-/g, "+").replace(/_/g, "/");
+      const pad = (4 - (b64.length % 4)) % 4;
+      b64 += "=".repeat(pad);
+      const binStr = atob(b64);
+      const bin = new Uint8Array(binStr.length);
+      for (let i = 0; i < binStr.length; i++) bin[i] = binStr.charCodeAt(i);
+
+      if (typeof DecompressionStream === "undefined") {
+        throw new Error("お使いのブラウザが gzip 展開に対応していません。Chrome / Safari / Edge の最新版で試してください。");
+      }
+      const ds = new DecompressionStream("gzip");
+      const stream = new Blob([bin]).stream().pipeThrough(ds);
+      const buf = await new Response(stream).arrayBuffer();
+      const text = new TextDecoder("utf-8").decode(buf);
+      return JSON.parse(text);
+    }
+
+    function render(data) {
+      const ev = data.evaluation || {};
+      const cap = data.captions || {};
+      const hk = data.hooks || {};
+      const labels = {
+        empathy: "① 共感型",
+        learning: "② 学び型",
+        consultation: "③ 相談導線型",
+      };
+
+      let evalLine = "";
+      if (ev && typeof ev === "object") {
+        evalLine =
+          "評価（1〜5） 共感:" +
+          (ev.empathy ?? "—") +
+          " 保存:" +
+          (ev.save ?? "—") +
+          " コメント:" +
+          (ev.comment ?? "—") +
+          " 導線:" +
+          (ev.lead ?? "—") +
+          " 世界観:" +
+          (ev.brand_fit ?? "—");
+      }
+
+      const blocks = ["empathy", "learning", "consultation"]
+        .map((k) => {
+          const lab = labels[k];
+          const hook = hk[k] ? '<p class="hook">' + escapeHtml(hk[k]) + "</p>" : "";
+          const body = cap[k]
+            ? '<div class="caption">' + escapeHtml(cap[k]) + "</div>"
+            : '<p class="muted">（なし）</p>';
+          return (
+            '<div class="card"><p class="variant-title">' +
+            escapeHtml(lab) +
+            "</p>" +
+            hook +
+            body +
+            "</div>"
+          );
+        })
+        .join("");
+
+      const tags = Array.isArray(data.hashtags)
+        ? data.hashtags.map(escapeHtml).join(" ")
+        : "";
+
+      const stories = data.stories_idea
+        ? '<div class="card"><p class="variant-title">Stories 案</p><p class="extra">' +
+          escapeHtml(data.stories_idea) +
+          "</p></div>"
+        : "";
+      const reel = data.reel_idea
+        ? '<div class="card"><p class="variant-title">Reel 案</p><p class="extra">' +
+          escapeHtml(data.reel_idea) +
+          "</p></div>"
+        : "";
+
+      document.getElementById("root").innerHTML =
+        '<div class="card">' +
+        '<p class="theme">' +
+        escapeHtml(data.theme || "（テーマなし）") +
+        "</p>" +
+        (data.direction
+          ? '<p class="muted">' + escapeHtml(data.direction) + "</p>"
+          : "") +
+        (evalLine ? '<p class="eval">' + escapeHtml(evalLine) + "</p>" : "") +
+        (tags ? '<p class="tags">' + escapeHtml(tags) + "</p>" : "") +
+        "</div>" +
+        blocks +
+        stories +
+        reel;
+    }
+
+    (async function () {
+      try {
+        const hash = window.location.hash || "";
+        const data = await decodeHash(hash);
+        if (!data || data.v !== 1) throw new Error("データ形式が古いか不正です。");
+        render(data);
+      } catch (e) {
+        showError(e.message || String(e));
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -7,6 +7,7 @@
  */
 
 const crypto = require("crypto");
+const zlib = require("zlib");
 
 const VARIANTS = new Set(["empathy", "learning", "consultation"]);
 /** ~4MB binary in base64 ≈ 5.6M chars; keep margin vs client 4MB cap */
@@ -44,39 +45,154 @@ function clip(text, max = 220) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
-function buildSlackMessage(result) {
+function clipCaptionForPreview(s, maxChars) {
+  if (typeof s !== "string") return "";
+  if (maxChars == null) return s;
+  return s.length <= maxChars ? s : `${s.slice(0, maxChars)}…（省略）`;
+}
+
+function buildPreviewPayload(result, maxCaptionChars, compact = false) {
+  const posts = Array.isArray(result.post_variants) ? result.post_variants : [];
+  const byVariant = Object.fromEntries(posts.map((p) => [p.variant, p]));
+  const e = byVariant.empathy || {};
+  const l = byVariant.learning || {};
+  const c = byVariant.consultation || {};
+  const hashtags = Array.isArray(result.hashtags) ? result.hashtags : [];
+  return {
+    v: 1,
+    theme: String(result.interpretation?.theme || ""),
+    direction: compact ? "" : String(result.interpretation?.direction || ""),
+    captions: {
+      empathy: clipCaptionForPreview(e.caption, maxCaptionChars),
+      learning: clipCaptionForPreview(l.caption, maxCaptionChars),
+      consultation: clipCaptionForPreview(c.caption, maxCaptionChars),
+    },
+    hooks: {
+      empathy: String(e.hook || ""),
+      learning: String(l.hook || ""),
+      consultation: String(c.hook || ""),
+    },
+    hashtags: compact ? hashtags.slice(0, 6) : hashtags,
+    evaluation: compact
+      ? {
+          empathy: result.evaluation?.empathy ?? null,
+          save: result.evaluation?.save ?? null,
+          comment: result.evaluation?.comment ?? null,
+          lead: result.evaluation?.lead ?? null,
+          brand_fit: result.evaluation?.brand_fit ?? null,
+        }
+      : result.evaluation || {},
+    stories_idea: compact ? "" : String(result.stories_idea || ""),
+    reel_idea: compact ? "" : String(result.reel_idea || ""),
+  };
+}
+
+function gzipPayloadToFragment(payload) {
+  const raw = Buffer.from(JSON.stringify(payload), "utf8");
+  const gz = zlib.gzipSync(raw, { level: zlib.constants.Z_DEFAULT_COMPRESSION });
+  return gz
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+function normalizeHostCandidate(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const u = new URL(withProto);
+    return u.host || "";
+  } catch {
+    return "";
+  }
+}
+
+function resolvePreviewHost(requestHost) {
+  const candidates = [
+    process.env.PUBLIC_APP_URL,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    process.env.VERCEL_URL,
+    requestHost,
+  ];
+  for (const c of candidates) {
+    const host = normalizeHostCandidate(c);
+    if (host) return host;
+  }
+  return "";
+}
+
+/** Slack 用: ブラウザで開く HTML プレビュー URL（データは # 以降に gzip+base64url）。 */
+function buildSlackPreviewUrl(result, { requestHost } = {}) {
+  const host = resolvePreviewHost(requestHost);
+  if (!host) return { url: "", reason: "host_unresolved" };
+  const appUrl = `https://${host}/`;
+
+  const maxUrlLen = 3800;
+  const trials = [
+    { cap: null, compact: false },
+    { cap: 3500, compact: false },
+    { cap: 2000, compact: false },
+    { cap: 1000, compact: false },
+    { cap: 500, compact: true },
+    { cap: 250, compact: true },
+    { cap: 140, compact: true },
+  ];
+  for (const t of trials) {
+    const payload = buildPreviewPayload(result, t.cap, t.compact);
+    const frag = gzipPayloadToFragment(payload);
+    const url = `https://${host}/slack-draft.html#${frag}`;
+    if (url.length <= maxUrlLen) return { url, reason: "", appUrl };
+  }
+  return { url: "", reason: "url_too_long", appUrl };
+}
+
+function buildSlackMessage(result, { requestHost } = {}) {
+  const { url: previewUrl, reason: previewReason, appUrl } = buildSlackPreviewUrl(result, { requestHost });
   const posts = Array.isArray(result.post_variants) ? result.post_variants : [];
   const byVariant = Object.fromEntries(posts.map((p) => [p.variant, p]));
   const ts = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
-  const empathy = byVariant.empathy || {};
-  const learning = byVariant.learning || {};
-  const consultation = byVariant.consultation || {};
   const themeLine = clip(String(result.interpretation?.theme || "-"), 240);
   const tagsLine = clip(
     Array.isArray(result.hashtags) ? result.hashtags.join(" ") : "-",
-    400
+    220
   );
+  const hookLine = [
+    `共感: ${clip(String(byVariant.empathy?.hook || "-"), 80)}`,
+    `学び: ${clip(String(byVariant.learning?.hook || "-"), 80)}`,
+    `相談: ${clip(String(byVariant.consultation?.hook || "-"), 80)}`,
+  ].join(" / ");
 
   const lines = [
     `*今日の投稿案が生成されました* (${ts})`,
+    previewUrl
+      ? `<${previewUrl}|📄 ブラウザで整形表示を開く>`
+      : previewReason === "url_too_long"
+        ? "_（整形リンクを作成できませんでした: データ量が多すぎました）_"
+        : "_（整形リンクを作成できませんでした: 公開URLを特定できません）_",
+    !previewUrl && appUrl ? `<${appUrl}|🌐 アプリを開く>` : "",
     "",
     `*テーマ*`,
     themeLine,
     "",
     `*評価* 共感:${result.evaluation?.empathy ?? "-"} 保存:${result.evaluation?.save ?? "-"} コメント:${result.evaluation?.comment ?? "-"} 導線:${result.evaluation?.lead ?? "-"} 世界観:${result.evaluation?.brand_fit ?? "-"}`,
     "",
-    `*投稿文（共感型）*`,
-    clip(empathy.caption, 900),
-    "",
-    `*投稿文（学び型）*`,
-    clip(learning.caption, 900),
-    "",
-    `*投稿文（相談導線型）*`,
-    clip(consultation.caption, 900),
+    `*切り口（要点）*`,
+    hookLine,
     "",
     `*ハッシュタグ* ${tagsLine}`,
+    "",
+    "_詳細文面はリンク先で確認してください_",
   ];
-  return clip(lines.join("\n"), 5000);
+  return {
+    text: clip(lines.join("\n"), 3000),
+    preview: {
+      url: previewUrl,
+      reason: previewReason,
+    },
+  };
 }
 
 async function sendSlack(webhookUrl, text) {
@@ -373,6 +489,9 @@ const DEFAULT_BRAND_GUIDELINES = [
   "■ 質感（優先）",
   "上品、知的、柔らかい、人間味、余韻、共感。「正論」より「気づき」を届ける投稿を優先する。",
   "",
+  "■ 文案の癖（デフォルトで守る）",
+  "「この写真は」「この一枚は」「写真では〜」のような、写真そのものを示すメタな書き出しは避ける。情景・感情・読者への語りから始める。フック・キャプション・idea_cards・ストーリーズ／リール案すべてに適用。selection_summary は選定理由なので短くメタ表現があってもよいが、同語で始める癖は避ける。",
+  "",
   "■ 導線",
   "保存・共感されやすい、自然な感情の流れを設計する。",
 ].join("\n");
@@ -392,6 +511,10 @@ function buildSystemPrompt() {
     "Language: Japanese for all user-facing strings.",
     "Tone: warm, trustworthy, not pushy, avoid strong claims.",
     "Goals: empathy, saves, trust, DMs — not viral tricks.",
+    "",
+    "Japanese wording — avoid clichéd meta openings about the upload:",
+    "- Do NOT start hooks or captions (post_variants) with phrases like 「この写真は」「この一枚は」「写真では」unless unavoidable; prefer scene, feeling, or reader-directed openings.",
+    "- Apply the same habit to idea_cards text, stories_idea, and reel_idea. selection_summary may briefly explain choice but avoid starting with 「この写真は」.",
     "",
     "Depth (when user gives business/work context):",
     "- Anchor hooks, captions, idea_cards, stories_idea, and reel_idea to that context: reader situation, your role/service, and one concrete takeaway they can use — avoid vague self-help filler unrelated to their work.",
@@ -508,7 +631,9 @@ module.exports = async (req, res) => {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
-  const generateSecret = process.env.GENERATE_SECRET;
+  const generateSecretRaw = process.env.GENERATE_SECRET;
+  const generateSecret =
+    typeof generateSecretRaw === "string" ? generateSecretRaw.trim() : "";
   if (generateSecret && !bearerMatchesGenerateSecret(req.headers.authorization, generateSecret)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -680,9 +805,11 @@ module.exports = async (req, res) => {
       slackStatus.skippedReason = "SLACK_WEBHOOK_URL is not configured";
     } else {
       try {
-        const msg = buildSlackMessage(parsed);
-        await sendSlack(webhookUrl, msg);
+        const reqHost = req?.headers?.["x-forwarded-host"] || req?.headers?.host || "";
+        const slackMessage = buildSlackMessage(parsed, { requestHost: reqHost });
+        await sendSlack(webhookUrl, slackMessage.text);
         slackStatus.sent = true;
+        slackStatus.preview = slackMessage.preview;
       } catch (err) {
         slackStatus.skippedReason = String(err);
       }
