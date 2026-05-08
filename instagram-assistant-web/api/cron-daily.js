@@ -3,6 +3,8 @@
  * Secured with Authorization: Bearer CRON_SECRET (set in Vercel env + Cron settings).
  *
  * Triggers daily Instagram draft generation and Slack notification by calling /api/generate.
+ * If Deployment Protection (e.g. Vercel Authentication) is on, enable "Protection Bypass for Automation"
+ * in project settings so VERCEL_AUTOMATION_BYPASS_SECRET is set; this handler sends x-vercel-protection-bypass.
  * Configure ONE of:
  * - DAILY_IMAGE_URL  … public HTTPS URL to a photo (analyze mode, costs image tokens)
  * - DAILY_IMAGE_SUMMARY … text summary only (regenerate mode, cheaper)
@@ -66,7 +68,7 @@ async function notifySlackSimple(text) {
   }
 }
 
-module.exports = async (req, res) => {
+async function cronDailyHandler(req, res) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
 
   if (req.method !== "GET" && req.method !== "POST") {
@@ -139,7 +141,12 @@ module.exports = async (req, res) => {
   const headers = {
     "Content-Type": "application/json",
   };
-  const genSecret = process.env.GENERATE_SECRET;
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  if (bypass) {
+    headers["x-vercel-protection-bypass"] = bypass;
+  }
+  const genSecretRaw = process.env.GENERATE_SECRET;
+  const genSecret = typeof genSecretRaw === "string" ? genSecretRaw.trim() : "";
   if (genSecret) {
     headers.Authorization = `Bearer ${genSecret}`;
   }
@@ -161,7 +168,13 @@ module.exports = async (req, res) => {
   try {
     json = JSON.parse(text);
   } catch {
-    await notifySlackSimple(`[cron-daily] generate が JSON 以外を返しました (${genRes.status})`);
+    const hint401 =
+      genRes.status === 401
+        ? " （401時: GENERATE_SECRET がブラウザ入力と一致しているか確認／Vercelのデプロイ保護がオンだとHTMLが返りこのエラーになります）"
+        : "";
+    await notifySlackSimple(
+      `[cron-daily] generate が JSON 以外を返しました (${genRes.status})${hint401}`
+    );
     return res.status(502).json({ error: "Invalid JSON from generate", status: genRes.status, raw: text.slice(0, 500) });
   }
 
@@ -179,4 +192,8 @@ module.exports = async (req, res) => {
     slack: json.slack,
     meta: json.meta,
   });
-};
+}
+
+cronDailyHandler.config = { maxDuration: 60 };
+
+module.exports = cronDailyHandler;

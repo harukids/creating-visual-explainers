@@ -684,7 +684,7 @@ function buildImageSummaryFallback(parsed) {
   return lines.join(" ").slice(0, 500);
 }
 
-module.exports = async (req, res) => {
+async function generateHandler(req, res) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
 
   if (req.method === "OPTIONS") {
@@ -822,14 +822,26 @@ module.exports = async (req, res) => {
     const repairSystem = `${buildSystemPrompt()}\n\nREPAIR: Previous output was rejected. Output ONE complete JSON object. Do not omit interpretation, stories_idea, reel_idea, or any top-level key. post_variants must be exactly 3 objects with variant literally empathy, learning, consultation (English), each with goal, hook, caption strings. Each caption must stay substantive (~400+ Japanese characters, multiple paragraphs with blank lines) per system rules.\n\nCOPY GUARD (mandatory): Remove every occurrence of: 「この写真は」「この一枚は」「この画像は」「このカットは」 from hooks, captions, interpretation fields, idea_cards, stories_idea, reel_idea, image_summary. Do not begin any sentence or paragraph with 「写真では」. Rewrite sentences without referring to the upload as 「この写真」. Keep selection_summary as media rationale but do not start it with 「この写真は」.`;
     const repairUser = `${userText}\n\nValidation errors (schema): ${schemaErr.join("; ") || "(none)"}.\nValidation errors (copy guard): ${copyErr.join("; ") || "(none)"}.\nReturn the full JSON again with every required field and zero forbidden substrings in Instagram-facing strings.`;
 
+    /** Schema OK・コピーガードのみNG・analyze のときは画像なしリペア（2回目のビジョン呼び出しを避けタイムアウトしにくくする） */
+    const copyOnlyRepair = Boolean(isAnalyze && v1.ok && !cg1.ok);
+    let repairUserFinal = repairUser;
+    let repairIsAnalyze = isAnalyze;
+    if (copyOnlyRepair) {
+      repairIsAnalyze = false;
+      const prevJson = JSON.stringify(parsed);
+      const capped =
+        prevJson.length > 14000 ? `${prevJson.slice(0, 14000)}\n…(truncated)` : prevJson;
+      repairUserFinal = `${repairUser}\n\nTEXT-ONLY REPAIR (no image): Rewrite the JSON below to satisfy copy_guard. Keep all keys and structure; only replace forbidden wording in strings.\nPrevious JSON:\n${capped}`;
+    }
+
     let second;
     try {
       second = await openAiCompleteJson({
         apiKey,
         systemPrompt: repairSystem,
-        isAnalyze,
-        userText: repairUser,
-        dataUrl,
+        isAnalyze: repairIsAnalyze,
+        userText: repairUserFinal,
+        dataUrl: repairIsAnalyze ? dataUrl : "",
         temperature: 0.35,
       });
     } catch (e) {
@@ -902,4 +914,8 @@ module.exports = async (req, res) => {
       },
     },
   });
-};
+}
+
+generateHandler.config = { maxDuration: 60 };
+
+module.exports = generateHandler;
